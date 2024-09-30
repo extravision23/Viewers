@@ -2,8 +2,9 @@ import React from 'react';
 
 import { useAppConfig } from '@state';
 import { Toolbox as NewToolbox } from '@ohif/ui-next';
-import { Toolbox as OldToolbox } from '@ohif/ui';
+import { Toolbox as OldToolbox, Button, ButtonEnums } from '@ohif/ui';
 import PanelSegmentation from './panels/PanelSegmentation';
+import classnames from "classnames";
 
 const getPanelModule = ({
   commandsManager,
@@ -86,6 +87,14 @@ const getPanelModule = ({
             ...customizationService.get('segmentation.panel'),
           }}
         />
+        <Button
+          type={ButtonEnums.type.primary}
+          className={classnames('ml-2', 'mar-top')}
+          onClick={() => {
+          }}
+        >
+          Export to Smart Glasses
+        </Button>
       </>
     );
   };
