@@ -28,3 +28,7 @@
   user-select: none;
   opacity: 0.5;
 }
+
+.mar-top {
+  margin-top: 100px;
+}
