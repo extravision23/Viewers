@@ -7,7 +7,7 @@ import {
   DropdownMenuItem,
 } from '../DropdownMenu/DropdownMenu';
 
-export function StudyBrowserSort({ servicesManager }: withAppTypes) {
+export default function StudyBrowserSort({ servicesManager }: withAppTypes) {
   const { customizationService, displaySetService } = servicesManager.services;
   const { values: sortFunctions } = customizationService.get('studyBrowser.sortFunctions');
 

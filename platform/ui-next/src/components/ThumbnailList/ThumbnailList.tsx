@@ -1,7 +1,7 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 
-import { Thumbnail } from '../Thumbnail';
+import Thumbnail from '../Thumbnail';
 
 const ThumbnailList = ({
   thumbnails,
@@ -109,4 +109,20 @@ ThumbnailList.propTypes = {
   viewPreset: PropTypes.string,
 };
 
-export { ThumbnailList };
+// TODO: Support "Viewport Identificator"?
+function _getModalityTooltip(modality) {
+  if (_modalityTooltips.hasOwnProperty(modality)) {
+    return _modalityTooltips[modality];
+  }
+
+  return 'Unknown';
+}
+
+const _modalityTooltips = {
+  SR: 'Structured Report',
+  SEG: 'Segmentation',
+  OT: 'Other',
+  RTSTRUCT: 'RT Structure Set',
+};
+
+export default ThumbnailList;
