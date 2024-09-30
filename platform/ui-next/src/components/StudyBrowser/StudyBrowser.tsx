@@ -142,4 +142,4 @@ StudyBrowser.propTypes = {
   ),
 };
 
-export { StudyBrowser };
+export default StudyBrowser;

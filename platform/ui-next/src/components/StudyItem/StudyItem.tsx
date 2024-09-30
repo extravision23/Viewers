@@ -87,4 +87,4 @@ StudyItem.propTypes = {
   viewPreset: PropTypes.string,
 };
 
-export { StudyItem };
+export default StudyItem;

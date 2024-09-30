@@ -418,4 +418,4 @@ SidePanel.propTypes = {
   expandedWidth: PropTypes.number,
 };
 
-export { SidePanel };
+export default SidePanel;
