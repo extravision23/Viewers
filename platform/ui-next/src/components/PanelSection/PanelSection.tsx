@@ -67,3 +67,4 @@ PanelSection.Content = ({ children, className }) => (
 );
 
 PanelSection.Content.displayName = 'PanelSection.Content';
+

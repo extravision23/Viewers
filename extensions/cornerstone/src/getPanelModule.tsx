@@ -1,9 +1,12 @@
 import React from 'react';
 
 import { Toolbox } from '@ohif/extension-default';
+import { Button } from '@ohif/ui-next';
 import PanelSegmentation from './panels/PanelSegmentation';
 import ActiveViewportWindowLevel from './components/ActiveViewportWindowLevel';
 import PanelMeasurement from './panels/PanelMeasurement';
+import classnames from 'classnames';
+import { ButtonEnums } from '@ohif/ui';
 
 const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: withAppTypes) => {
   const wrappedPanelSegmentation = ({ configuration }) => {
@@ -47,6 +50,14 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
             ...configuration,
           }}
         />
+        <Button
+          type={ButtonEnums.type.primary}
+          className={classnames('ml-2', 'mar-top')}
+          onClick={() => {
+          }}
+        >
+          Export to Smart Glasses
+        </Button>
       </>
     );
   };
