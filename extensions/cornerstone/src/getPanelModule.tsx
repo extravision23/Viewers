@@ -4,6 +4,7 @@ import { Toolbox } from '@ohif/ui-next';
 import PanelSegmentation from './panels/PanelSegmentation';
 import ActiveViewportWindowLevel from './components/ActiveViewportWindowLevel';
 import PanelMeasurementTable from './panels/PanelMeasurement';
+import classnames from "classnames";
 
 const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: withAppTypes) => {
   const wrappedPanelSegmentation = ({ configuration }) => {
@@ -53,6 +54,14 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
             ...configuration,
           }}
         />
+        <Button
+          type={ButtonEnums.type.primary}
+          className={classnames('ml-2', 'mar-top')}
+          onClick={() => {
+          }}
+        >
+          Export to Smart Glasses
+        </Button>
       </>
     );
   };
