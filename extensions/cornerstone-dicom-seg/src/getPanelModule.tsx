@@ -1,9 +1,10 @@
 import React from 'react';
 
 import { useAppConfig } from '@state';
-import { Toolbox } from '@ohif/ui-next';
+import { Button, Toolbox } from "@ohif/ui-next";
 import PanelSegmentation from './panels/PanelSegmentation';
 import classnames from "classnames";
+import { ButtonEnums } from '@ohif/ui';
 
 const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: withAppTypes) => {
   const { customizationService } = servicesManager.services;
