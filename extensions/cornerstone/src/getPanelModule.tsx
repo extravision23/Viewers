@@ -1,10 +1,11 @@
 import React from 'react';
 
-import { Toolbox } from '@ohif/ui-next';
+import { Button, Toolbox } from "@ohif/ui-next";
 import PanelSegmentation from './panels/PanelSegmentation';
 import ActiveViewportWindowLevel from './components/ActiveViewportWindowLevel';
 import PanelMeasurementTable from './panels/PanelMeasurement';
 import classnames from "classnames";
+import { ButtonEnums } from '@ohif/ui';
 
 const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: withAppTypes) => {
   const wrappedPanelSegmentation = ({ configuration }) => {
