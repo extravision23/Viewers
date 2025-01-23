@@ -162,7 +162,7 @@ const cornerstoneExtension: Types.Extensions.Extension = {
       ViewportActionCornersProvider
     );
 
-    const { syncGroupService } = servicesManager.services;
+    const { syncGroupService, customizationService } = servicesManager.services;
     syncGroupService.registerCustomSynchronizer('frameview', createFrameViewSynchronizer);
 
     return init.call(this, props);
