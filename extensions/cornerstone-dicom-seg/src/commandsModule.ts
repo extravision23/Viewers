@@ -342,6 +342,48 @@ const commandsModule = ({
         });
       });
     },
+    sendToGlasses: ({ segmentationId }) => {
+      try {
+        // Отримання сегментації
+        const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
+        const generatedSegmentation = actions.generateSegmentation({
+          segmentationId,
+        });
+
+        if (!generatedSegmentation || !generatedSegmentation.dataset) {
+          console.error('Failed to generate segmentation dataset.');
+          return;
+        }
+
+        const dataset = generatedSegmentation.dataset;
+
+        const dicomBlob = datasetToBlob(dataset);
+
+        const formData = new FormData();
+        formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
+
+        return fetch('https://dicomobj.azurewebsites.net/api/ConvertDicomToObj', {
+          method: 'POST',
+          body: formData, // Автоматично встановлює Content-Type
+        })
+          .then(async response => {
+            if (response.ok) {
+              console.log('Segmentation sent successfully!');
+              const result = await response.text();
+              console.log('Server response:', result);
+            } else {
+              console.error(
+                `Error sending segmentation. Status: ${response.status}, Text: ${response.statusText}`
+              );
+            }
+          })
+          .catch(error => {
+            console.error('Error sending segmentation:', error);
+          });
+      } catch (error) {
+        console.error('Unexpected error in sendToGlasses:', error);
+      }
+    },
   };
 
   const definitions = {
@@ -375,6 +417,9 @@ const commandsModule = ({
     },
     setThresholdRange: {
       commandFn: actions.setThresholdRange,
+    },
+    sendToGlasses: {
+      commandFn: actions.sendToGlasses,
     },
   };
 
