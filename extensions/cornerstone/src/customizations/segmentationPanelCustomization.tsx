@@ -23,6 +23,7 @@ export default function getSegmentationPanelCustomization({ commandsManager, ser
       storeSegmentation,
       onSegmentationDownload,
       onSegmentationDownloadRTSS,
+      onSendToGlasses,
       t,
     }) => (
       <DropdownMenuContent align="start">
@@ -61,6 +62,9 @@ export default function getSegmentationPanelCustomization({ commandsManager, ser
                 onClick={() => onSegmentationDownload(activeSegmentation.segmentationId)}
               >
                 {t('Download DICOM SEG')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onSendToGlasses(activeSegmentation.segmentationId)}>
+                <span className="pl-2">{t('Export to Smart Glasses')}</span>
               </DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuPortal>
