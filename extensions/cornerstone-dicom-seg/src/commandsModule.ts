@@ -304,7 +304,6 @@ const commandsModule = ({
     },
     sendToGlasses: ({ segmentationId }) => {
       try {
-        // Отримання сегментації
         const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
         const generatedSegmentation = actions.generateSegmentation({
           segmentationId,

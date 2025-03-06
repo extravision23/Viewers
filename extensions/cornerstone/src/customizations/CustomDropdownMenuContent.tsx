@@ -74,6 +74,9 @@ export const CustomDropdownMenuContent = () => {
     downloadCSVSegmentationReport: segmentationId => {
       commandsManager.run('downloadCSVSegmentationReport', { segmentationId });
     },
+    onSendToGlasses: segmentationId => {
+      commandsManager.run('sendToGlasses', { segmentationId });
+    },
   };
 
   return (
@@ -142,6 +145,16 @@ export const CustomDropdownMenuContent = () => {
               disabled={!allowExport}
             >
               {t('DICOM SEG')}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => actions.onSegmentationDownload(activeSegmentation.segmentationId)}
+            >
+              {t('Download DICOM SEG')}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => actions.onSendToGlasses(activeSegmentation.segmentationId)}
+            >
+              <span className="pl-2">{t('Export to Smart Glasses')}</span>
             </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuPortal>
