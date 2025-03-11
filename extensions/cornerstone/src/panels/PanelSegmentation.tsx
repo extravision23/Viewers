@@ -93,6 +93,12 @@ export default function PanelSegmentation({ children }: withAppTypes) {
     getRenderInactiveSegmentations: () => {
       return commandsManager.run('getRenderInactiveSegmentations');
     },
+    onSendToGlasses: segmentationId => {
+      commandsManager.run('sendToGlasses', { segmentationId });
+    },
+    onDownloadObj: segmentationId => {
+      commandsManager.run('downloadObj', { segmentationId });
+    }
   };
 
   // Generate export options
