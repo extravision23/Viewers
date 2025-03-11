@@ -111,6 +111,12 @@ export default function PanelSegmentation({
     getRenderInactiveSegmentations: () => {
       return commandsManager.run('getRenderInactiveSegmentations');
     },
+    onSendToGlasses: segmentationId => {
+      commandsManager.run('sendToGlasses', { segmentationId });
+    },
+    onDownloadObj: segmentationId => {
+      commandsManager.run('downloadObj', { segmentationId });
+    }
   };
 
   const segmentationTableMode = customizationService.getCustomization(
@@ -203,6 +209,8 @@ export default function PanelSegmentation({
         setRenderOutline={handlers.setRenderOutline}
         setFillAlphaInactive={handlers.setFillAlphaInactive}
         renderInactiveSegmentations={handlers.getRenderInactiveSegmentations()}
+        onSendToGlasses={handlers.onSendToGlasses}
+        onDownloadObj={handlers.onDownloadObj}
       >
         {children}
         <SegmentationTable.Config />

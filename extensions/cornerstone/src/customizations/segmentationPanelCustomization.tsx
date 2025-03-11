@@ -24,6 +24,7 @@ export default function getSegmentationPanelCustomization({ commandsManager, ser
       onSegmentationDownload,
       onSegmentationDownloadRTSS,
       onSendToGlasses,
+      onDownloadObj,
       t,
     }) => (
       <DropdownMenuContent align="start">
@@ -65,6 +66,9 @@ export default function getSegmentationPanelCustomization({ commandsManager, ser
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onSendToGlasses(activeSegmentation.segmentationId)}>
                 <span className="pl-2">{t('Export to Smart Glasses')}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onDownloadObj(activeSegmentation.segmentationId)}>
+                <span className="pl-2">{t('Export to OBJ model')}</span>
               </DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuPortal>
