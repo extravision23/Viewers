@@ -37,7 +37,7 @@ const commandsModule = ({
   servicesManager,
   extensionManager,
 }: Types.Extensions.ExtensionParams): Types.Extensions.CommandsModule => {
-  const { segmentationService, displaySetService, viewportGridService, toolGroupService } =
+  const { segmentationService, displaySetService, viewportGridService } =
     servicesManager.services as AppTypes.Services;
 
   const actions = {
@@ -236,7 +236,7 @@ const commandsModule = ({
         try {
           const selectedDataSourceConfig = selectedDataSource
             ? extensionManager.getDataSources(selectedDataSource)[0]
-            : defaultDataSource;
+            : defaultDataSource[0];
 
           const generatedData = actions.generateSegmentation({
             segmentationId,
@@ -302,6 +302,92 @@ const commandsModule = ({
         console.warn(e);
       }
     },
+    sendToGlasses: ({ segmentationId }) => {
+      try {
+        const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
+        const generatedSegmentation = actions.generateSegmentation({
+          segmentationId,
+        });
+
+        if (!generatedSegmentation || !generatedSegmentation.dataset) {
+          console.error('Failed to generate segmentation dataset.');
+          return;
+        }
+
+        const dataset = generatedSegmentation.dataset;
+
+        const dicomBlob = datasetToBlob(dataset);
+
+        const formData = new FormData();
+        formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
+
+        return fetch('https://dicomobj.azurewebsites.net/api/ConvertDicomToObj', {
+          method: 'POST',
+          body: formData, // Автоматично встановлює Content-Type
+        })
+          .then(async response => {
+            if (response.ok) {
+              console.log('Segmentation sent successfully!');
+              const result = await response.text();
+              console.log('Server response:', result);
+            } else {
+              console.error(
+                `Error sending segmentation. Status: ${response.status}, Text: ${response.statusText}`
+              );
+            }
+          })
+          .catch(error => {
+            console.error('Error sending segmentation:', error);
+          });
+      } catch (error) {
+        console.error('Unexpected error in sendToGlasses:', error);
+      }
+    },
+    downloadObj: ({ segmentationId }) => {
+      try {
+        const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
+        const generatedSegmentation = actions.generateSegmentation({ segmentationId });
+
+        if (!generatedSegmentation || !generatedSegmentation.dataset) {
+          console.error('Failed to generate segmentation dataset.');
+          return;
+        }
+
+        const dataset = generatedSegmentation.dataset;
+        const dicomBlob = datasetToBlob(dataset);
+
+        // Формуємо FormData з DICOM файлом
+        const formData = new FormData();
+        formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
+
+        fetch('https://dicomobj.azurewebsites.net/api/ConvertDicomToObjDownload', {
+          method: 'POST',
+          body: formData,
+        })
+          .then(async response => {
+            if (response.ok) {
+              // Отримуємо відповіді як blob і створюємо посилання для завантаження
+              const blob = await response.blob();
+              const url = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${segmentationInOHIF.label}.obj`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              window.URL.revokeObjectURL(url);
+              console.log('OBJ file downloaded successfully!');
+            } else {
+              console.error(`Error downloading OBJ file. Status: ${response.status}`);
+            }
+          })
+          .catch(error => {
+            console.error('Error downloading OBJ file:', error);
+          });
+      } catch (error) {
+        console.error('Unexpected error in downloadObj:', error);
+      }
+    },
   };
 
   const definitions = {
@@ -320,6 +406,12 @@ const commandsModule = ({
     },
     downloadRTSS: {
       commandFn: actions.downloadRTSS,
+    },
+    sendToGlasses: {
+      commandFn: actions.sendToGlasses,
+    },
+    downloadObj: {
+      commandFn: actions.downloadObj,
     },
   };
 

@@ -11,7 +11,7 @@ export enum showDialogOption {
 
 const InvestigationalUseDialog = ({
   dialogConfiguration = {
-    option: showDialogOption.AlwaysShowDialog,
+    option: showDialogOption.NeverShowDialog,
   },
 }) => {
   const { option, days } = dialogConfiguration;

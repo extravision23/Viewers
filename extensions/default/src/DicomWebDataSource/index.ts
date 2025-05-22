@@ -172,6 +172,7 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
       wadoDicomWebClient = dicomWebConfig.staticWado
         ? new StaticWadoClient(wadoConfig)
         : new api.DICOMwebClient(wadoConfig);
+      implementation.retrieve.customClient = wadoDicomWebClient as StaticWadoClient;
     },
     query: {
       studies: {
@@ -214,6 +215,7 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
       },
     },
     retrieve: {
+      customClient: null as unknown as StaticWadoClient,
       /**
        * Generates a URL that can be used for direct retrieve of the bulkdata
        *
