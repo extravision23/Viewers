@@ -37,7 +37,7 @@ const commandsModule = ({
   servicesManager,
   extensionManager,
 }: Types.Extensions.ExtensionParams): Types.Extensions.CommandsModule => {
-  const { segmentationService, displaySetService, viewportGridService, toolGroupService } =
+  const { segmentationService, displaySetService, viewportGridService } =
     servicesManager.services as AppTypes.Services;
 
   const actions = {
@@ -345,7 +345,6 @@ const commandsModule = ({
     },
     downloadObj: ({ segmentationId }) => {
       try {
-        // Отримання даних сегментації та генерація DICOM Blob
         const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
         const generatedSegmentation = actions.generateSegmentation({ segmentationId });
 
