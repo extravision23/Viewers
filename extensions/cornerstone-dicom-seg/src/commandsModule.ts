@@ -33,6 +33,11 @@ const {
 
 const { downloadDICOMData } = helpers;
 
+function getAuthHeader(dataSource) {
+  const bearer = dataSource?.retrieve?.customClient?.headers?.Authorization;
+  return bearer ? { Authorization: bearer } : {};
+}
+
 const commandsModule = ({
   servicesManager,
   extensionManager,
@@ -318,7 +323,7 @@ const commandsModule = ({
         setUIState('activeSegmentationUtility', buttonId);
       }
     },
-    sendToGlasses: ({ segmentationId }) => {
+    sendToGlasses: ({ segmentationId, dataSource }) => {
       try {
         const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
         const generatedSegmentation = actions.generateSegmentation({
@@ -337,9 +342,14 @@ const commandsModule = ({
         const formData = new FormData();
         formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
 
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+
         return fetch('https://dicomobj.azurewebsites.net/api/ConvertDicomToObj', {
           method: 'POST',
-          body: formData, // Автоматично встановлює Content-Type
+          body: formData,
+          headers: {
+            ...getAuthHeader(defaultDataSource),
+          },
         })
           .then(async response => {
             if (response.ok) {
@@ -359,7 +369,7 @@ const commandsModule = ({
         console.error('Unexpected error in sendToGlasses:', error);
       }
     },
-    downloadObj: ({ segmentationId }) => {
+    downloadObj: ({ segmentationId, dataSource }) => {
       try {
         // Отримання даних сегментації та генерація DICOM Blob
         const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
@@ -377,9 +387,14 @@ const commandsModule = ({
         const formData = new FormData();
         formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
 
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+
         fetch('https://dicomobj.azurewebsites.net/api/ConvertDicomToObjDownload', {
           method: 'POST',
           body: formData,
+          headers: {
+            ...getAuthHeader(defaultDataSource),
+          },
         })
           .then(async response => {
             if (response.ok) {
