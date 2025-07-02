@@ -19,6 +19,7 @@ interface ExportSegmentationSubMenuItemProps {
     storeSegmentation: (segmentationId: string, modality?: string) => Promise<unknown>;
     downloadCSVSegmentationReport: (segmentationId: string) => void;
     onSendToGlasses: (segmentationId: string) => void;
+    onDownloadObj: (segmentationId: string) => void;
   };
 }
 
@@ -67,6 +68,11 @@ export const ExportSegmentationSubMenuItem: React.FC<ExportSegmentationSubMenuIt
                 onClick={() => actions.onSendToGlasses(segmentationId)}
               >
                 <span className="pl-2">{t('Export to Smart Glasses')}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => actions.onDownloadObj(segmentationId)}
+              >
+                <span className="pl-2">{t('Convert to OBJ and download')}</span>
               </DropdownMenuItem>
             </DropdownMenuSub>
           )}
