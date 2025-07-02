@@ -77,6 +77,9 @@ export const CustomDropdownMenuContent = () => {
     onSendToGlasses: segmentationId => {
       commandsManager.run('sendToGlasses', { segmentationId });
     },
+    onDownloadObj: segmentationId => {
+      commandsManager.run('downloadObj', { segmentationId });
+    },
   };
 
   return (
@@ -156,6 +159,11 @@ export const CustomDropdownMenuContent = () => {
               onClick={() => actions.onSendToGlasses(activeSegmentation.segmentationId)}
             >
               <span className="pl-2">{t('Export to Smart Glasses')}</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => actions.onDownloadObj(activeSegmentation.segmentationId)}
+            >
+              <span className="pl-2">{t('Convert to OBJ and download')}</span>
             </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuPortal>

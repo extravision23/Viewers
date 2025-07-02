@@ -98,7 +98,7 @@ export default function PanelSegmentation({ children }: withAppTypes) {
     },
     onDownloadObj: segmentationId => {
       commandsManager.run('downloadObj', { segmentationId });
-    }
+    },
   };
 
   // Generate export options
