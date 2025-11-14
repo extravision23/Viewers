@@ -343,8 +343,9 @@ const commandsModule = ({
         formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
 
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
 
-        return fetch('https://dicomobj.azurewebsites.net/api/ConvertDicomToObj', {
+        return fetch(`https://${config.pythonFunctionName}.azurewebsites.net/api/ConvertDicomToObj`, {
           method: 'POST',
           body: formData,
           headers: {
@@ -388,8 +389,9 @@ const commandsModule = ({
         formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
 
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
 
-        fetch('https://dicomobj.azurewebsites.net/api/ConvertDicomToObjDownload', {
+        fetch(`https://${config.pythonFunctionName}.azurewebsites.net/api/ConvertDicomToObjDownload`, {
           method: 'POST',
           body: formData,
           headers: {
