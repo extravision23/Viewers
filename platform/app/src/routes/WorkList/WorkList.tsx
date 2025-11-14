@@ -11,6 +11,7 @@ import filtersMeta from './filtersMeta.js';
 import { useAppConfig } from '@state';
 import { useDebounce, useSearchParams } from '../../hooks';
 import { utils, Types as coreTypes } from '@ohif/core';
+import { toast } from '@ohif/ui-next';
 
 import {
   StudyListExpandedRow,
@@ -46,6 +47,11 @@ const { sortBySeriesDate } = utils;
 
 const seriesInStudiesMap = new Map();
 
+function getAuthHeader(dataSource) {
+  const bearer = dataSource?.retrieve?.customClient?.headers?.Authorization;
+  return bearer ? { Authorization: bearer } : {};
+}
+
 /**
  * TODO:
  * - debounce `setFilterValues` (150ms?)
@@ -69,6 +75,7 @@ function WorkList({
   const navigate = useNavigate();
   const STUDIES_LIMIT = 101;
   const queryFilterValues = _getQueryFilterValues(searchParams);
+  const config = dataSource.getConfig();
   const [sessionQueryFilterValues, updateSessionQueryFilterValues] = useSessionStorage({
     key: 'queryFilterValues',
     defaultValue: queryFilterValues,
@@ -164,6 +171,62 @@ function WorkList({
       pageNumber: 1,
       resultsPerPage: Number(newResultsPerPage),
     });
+  };
+
+  const handleDeleteStudy = async studyUID => {
+    if (!window.confirm(`Delete study ${studyUID}?`)) {
+      return;
+    }
+    try {
+      await dataSource.retrieve.customClient.deleteStudy(studyUID);
+      onRefresh?.();
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to delete study.');
+    }
+  };
+
+  const runSegmentation = async (url, studyId, label) => {
+    try {
+      toast.info('Starting segmentation, please wait...');
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(dataSource),
+        },
+        body: JSON.stringify({ studyId }),
+      });
+      if (!res.ok) {
+        throw new Error(`Status ${res.status}`);
+      }
+      toast.success(`${label} successfully triggered.`);
+    } catch (err) {
+      console.error(err);
+      toast.error(`${label} failed.`);
+    }
+  };
+
+  const handleDownloadStudy = async (studyUID: string) => {
+    try {
+      const res = await fetch(
+        `https://${config.pythonFunctionName}.azurewebsites.net/api/downloaddicom?studyId=${encodeURIComponent(studyUID)}`,
+        {
+          credentials: 'include',
+          headers: {
+            ...getAuthHeader(dataSource),
+          },
+        }
+      );
+      if (!res.ok) {
+        throw new Error(`${res.status} ${res.statusText}`);
+      }
+      const sasUrl = (await res.text()).trim();
+      window.open(sasUrl, '_blank');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to download study.');
+    }
   };
 
   // Set body style
@@ -297,6 +360,9 @@ function WorkList({
     return {
       dataCY: `studyRow-${studyInstanceUid}`,
       clickableCY: studyInstanceUid,
+      studyUID: studyInstanceUid,
+      onDeleteStudy: handleDeleteStudy,
+      onDownloadStudy: handleDownloadStudy,
       row: [
         {
           key: 'patientName',
@@ -446,7 +512,7 @@ function WorkList({
                       }
                       onClick={() => {}}
                       dataCY={`mode-${mode.routeName}-${studyInstanceUid}`}
-                      className={isValidMode ? 'text-[13px]' : 'bg-[#222d44] text-[13px]'}
+                      className={isValidMode ? 'text-[13px]' : 'bg-[#166b2b] text-[13px]'}
                     >
                       {mode.displayName}
                     </Button>
@@ -454,6 +520,32 @@ function WorkList({
                 )
               );
             })}
+            <Button
+              type={ButtonEnums.type.secondary}
+              size={ButtonEnums.size.small}
+              onClick={() =>
+                runSegmentation(
+                  `https://${config.pythonFunctionName}.azurewebsites.net/api/segmentdicom`,
+                  studyInstanceUid,
+                  'Synthetic Segmentation'
+                )
+              }
+            >
+              Run Synthetic Segmentation
+            </Button>
+            <Button
+              type={ButtonEnums.type.secondary}
+              size={ButtonEnums.size.small}
+              onClick={() =>
+                runSegmentation(
+                  `https://${config.pythonFunctionName}.azurewebsites.net/api/segmenttumor`,
+                  studyInstanceUid,
+                  'Tumor Segmentation'
+                )
+              }
+            >
+              Run Tumor Segmentation
+            </Button>
           </div>
         </StudyListExpandedRow>
       ),
@@ -685,5 +777,7 @@ function _sortStringDates(s1, s2, sortModifier) {
     return -1 * sortModifier;
   }
 }
+
+
 
 export default WorkList;
