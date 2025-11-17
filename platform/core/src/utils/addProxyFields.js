@@ -35,21 +35,34 @@ export function addProxyFields(instance) {
     return instance;
   }
 
-  for(const fieldProxy of fieldProxies) {
-    if( fieldProxy in instance) {
+  for (const fieldProxy of fieldProxies) {
+    if (fieldProxy in instance) {
       continue;
     }
-    Object.defineProperty(instance,fieldProxy, {
+    // Use a private property name to store the actual value on the instance
+    const valueKey = `_${fieldProxy}_local`;
+    Object.defineProperty(instance, fieldProxy, {
       configurable: true,
       enumerable: true,
       get: () => {
-        return instance._parentInstance?.[fieldProxy] ?? instance._parentInstance?._shared?.[fieldProxy];
-      }
+        // First check if a value was explicitly set on this instance
+        if (valueKey in instance) {
+          return instance[valueKey];
+        }
+        // Otherwise fall back to parent or shared
+        return (
+          instance._parentInstance?.[fieldProxy] ?? instance._parentInstance?._shared?.[fieldProxy]
+        );
+      },
+      set: value => {
+        // Store the value directly on the instance
+        instance[valueKey] = value;
+      },
     });
   }
 
   // Mark this proxy to avoid double wrapping
-  Object.defineProperty(instance,METADATA_PROXY_FLAG, { value: true });
+  Object.defineProperty(instance, METADATA_PROXY_FLAG, { value: true });
 
   return instance;
 }
