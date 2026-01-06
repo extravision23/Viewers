@@ -31,6 +31,11 @@ const {
 
 const { downloadDICOMData } = helpers;
 
+function getAuthHeader(dataSource) {
+  const bearer = dataSource?.retrieve?.customClient?.headers?.Authorization;
+  return bearer ? { Authorization: bearer } : {};
+}
+
 const commandsModule = ({
   servicesManager,
   extensionManager,
@@ -237,7 +242,7 @@ const commandsModule = ({
         try {
           const selectedDataSourceConfig = selectedDataSource
             ? extensionManager.getDataSources(selectedDataSource)[0]
-            : defaultDataSource;
+            : defaultDataSource[0];
 
           const args = {
             segmentationId,
@@ -328,6 +333,210 @@ const commandsModule = ({
         setUIState('activeSegmentationUtility', buttonId);
       }
     },
+    sendToGlasses: ({ segmentationId, dataSource }) => {
+      try {
+        const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
+        const generatedSegmentation = actions.generateSegmentation({
+          segmentationId,
+        });
+
+        if (!generatedSegmentation || !generatedSegmentation.dataset) {
+          console.error('Failed to generate segmentation dataset.');
+          return;
+        }
+
+        const dataset = generatedSegmentation.dataset;
+
+        const dicomBlob = datasetToBlob(dataset);
+
+        const formData = new FormData();
+        formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
+
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
+
+        return fetch(
+          `https://${config.pythonFunctionName}.azurewebsites.net/api/ConvertDicomToObj`,
+          {
+            method: 'POST',
+            body: formData,
+            headers: {
+              ...getAuthHeader(defaultDataSource),
+            },
+          }
+        )
+          .then(async response => {
+            if (response.ok) {
+              console.log('Segmentation sent successfully!');
+              const result = await response.text();
+              console.log('Server response:', result);
+            } else {
+              console.error(
+                `Error sending segmentation. Status: ${response.status}, Text: ${response.statusText}`
+              );
+            }
+          })
+          .catch(error => {
+            console.error('Error sending segmentation:', error);
+          });
+      } catch (error) {
+        console.error('Unexpected error in sendToGlasses:', error);
+      }
+    },
+    downloadObj: ({ segmentationId, dataSource }) => {
+      try {
+        // Отримання даних сегментації та генерація DICOM Blob
+        const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
+        const generatedSegmentation = actions.generateSegmentation({ segmentationId });
+
+        if (!generatedSegmentation || !generatedSegmentation.dataset) {
+          console.error('Failed to generate segmentation dataset.');
+          return;
+        }
+
+        const dataset = generatedSegmentation.dataset;
+        const dicomBlob = datasetToBlob(dataset);
+
+        // Формуємо FormData з DICOM файлом
+        const formData = new FormData();
+        formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
+
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
+
+        fetch(
+          `https://${config.pythonFunctionName}.azurewebsites.net/api/ConvertDicomToObjDownload`,
+          {
+            method: 'POST',
+            body: formData,
+            headers: {
+              ...getAuthHeader(defaultDataSource),
+            },
+          }
+        )
+          .then(async response => {
+            if (response.ok) {
+              // Отримуємо відповіді як blob і створюємо посилання для завантаження
+              const blob = await response.blob();
+              const url = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${segmentationInOHIF.label}.obj`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              window.URL.revokeObjectURL(url);
+              console.log('OBJ file downloaded successfully!');
+            } else {
+              console.error(`Error downloading OBJ file. Status: ${response.status}`);
+            }
+          })
+          .catch(error => {
+            console.error('Error downloading OBJ file:', error);
+          });
+      } catch (error) {
+        console.error('Unexpected error in downloadObj:', error);
+      }
+    },
+    segmentByPreset: async ({
+      studyInstanceUID,
+      seriesInstanceUID,
+      preset,
+      customWindow,
+      customSegRange,
+      dataSource,
+    }) => {
+      try {
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
+
+        const payload = {
+          studyInstanceUID,
+          seriesInstanceUID,
+          preset,
+          customWindow,
+          customSegRange,
+          output: {
+            mode: 'dicom_seg',
+            returnMode: 'meta',
+          },
+        };
+
+        const response = await fetch(
+          `https://${config.pythonFunctionName}.azurewebsites.net/api/segmentbypreset`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...getAuthHeader(defaultDataSource),
+            },
+            body: JSON.stringify(payload),
+          }
+        );
+
+        if (!response.ok) {
+          const text = await response.text();
+          console.error('Segmentation request failed:', response.status, text);
+          return;
+        }
+
+        const result = await response.json();
+        console.log('Segmentation successful:', result);
+
+        return result;
+      } catch (e) {
+        console.error('Error in segmentByPreset:', e);
+      }
+    },
+    magicWandSegmentation: async ({
+      studyInstanceUID,
+      seriesInstanceUID,
+      seed,
+      options,
+      dataSource,
+    }) => {
+      try {
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
+
+        // Use the same endpoint pattern as segmentByPreset
+        const endpoint = `https://${config.pythonFunctionName}.azurewebsites.net/api/segmentbymagicwand`;
+
+        const payload: any = {
+          studyInstanceUID,
+          seriesInstanceUID,
+          seed,
+        };
+
+        // Only include options if they are provided
+        if (options && Object.keys(options).length > 0) {
+          payload.options = options;
+        }
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader(defaultDataSource),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          console.error('Magic wand segmentation request failed:', response.status, text);
+          throw new Error(`Segmentation request failed: ${response.status} ${text}`);
+        }
+
+        const result = await response.json();
+        console.log('Magic wand segmentation successful:', result);
+
+        return result;
+      } catch (e) {
+        console.error('Error in magicWandSegmentation:', e);
+        throw e;
+      }
+    },
   };
 
   const definitions = {
@@ -337,6 +546,10 @@ const commandsModule = ({
     storeSegmentation: actions.storeSegmentation,
     downloadRTSS: actions.downloadRTSS,
     toggleActiveSegmentationUtility: actions.toggleActiveSegmentationUtility,
+    sendToGlasses: actions.sendToGlasses,
+    downloadObj: actions.downloadObj,
+    segmentByPreset: actions.segmentByPreset,
+    magicWandSegmentation: actions.magicWandSegmentation,
   };
 
   return {
