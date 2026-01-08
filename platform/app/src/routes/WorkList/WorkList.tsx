@@ -186,27 +186,6 @@ function WorkList({
     }
   };
 
-  const runSegmentation = async (url, studyId, label) => {
-    try {
-      toast.info('Starting segmentation, please wait...');
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeader(dataSource),
-        },
-        body: JSON.stringify({ studyId }),
-      });
-      if (!res.ok) {
-        throw new Error(`Status ${res.status}`);
-      }
-      toast.success(`${label} successfully triggered.`);
-    } catch (err) {
-      console.error(err);
-      toast.error(`${label} failed.`);
-    }
-  };
-
   const handleDownloadStudy = async (studyUID: string) => {
     try {
       const res = await fetch(
@@ -529,32 +508,6 @@ function WorkList({
                 )
               );
             })}
-            <Button
-              type={ButtonEnums.type.secondary}
-              size={ButtonEnums.size.small}
-              onClick={() =>
-                runSegmentation(
-                  `https://${config.pythonFunctionName}.azurewebsites.net/api/segmentdicom`,
-                  studyInstanceUid,
-                  'Synthetic Segmentation'
-                )
-              }
-            >
-              Run Synthetic Segmentation
-            </Button>
-            <Button
-              type={ButtonEnums.type.secondary}
-              size={ButtonEnums.size.small}
-              onClick={() =>
-                runSegmentation(
-                  `https://${config.pythonFunctionName}.azurewebsites.net/api/segmenttumor`,
-                  studyInstanceUid,
-                  'Tumor Segmentation'
-                )
-              }
-            >
-              Run Tumor Segmentation
-            </Button>
           </div>
         </StudyListExpandedRow>
       ),
