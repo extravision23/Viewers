@@ -11,7 +11,6 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useSystem } from '@ohif/core/src';
 import { ExportSegmentationSubMenuItem } from '../components/ExportSegmentationSubMenuItem';
-import SegmentByPresetMenuItem from '../components/SegmentByPresetMenuItem';
 
 /**
  * Custom dropdown menu component for segmentation panel that uses context for data
@@ -107,7 +106,6 @@ export const CustomDropdownMenuContent = () => {
         allowExport={allowExport}
         actions={actions}
       />
-      <SegmentByPresetMenuItem segmentationId={segmentationId} />
       <DropdownMenuSeparator />
       <DropdownMenuItem onClick={() => onSegmentationDelete(segmentationId)}>
         <Icons.Delete className="text-red-600" />

@@ -105,12 +105,20 @@ window.config = {
       namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
       sourceName: 'ohif',
       configuration: {
-        friendlyName: 'AWS S3 Static wado server',
-        name: 'aws',
-        wadoUriRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
-        qidoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
-        wadoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
-        qidoSupportsIncludeField: false,
+        friendlyName: 'Azure Dicom Web (with local functions)',
+        name: 'AzureDicomWeb',
+
+        wadoUriRoot: 'https://extravisionohif-extravisionohif.dicom.azurehealthcareapis.com/v1',
+        qidoRoot: 'https://extravisionohif-extravisionohif.dicom.azurehealthcareapis.com/v1',
+        wadoRoot: 'https://extravisionohif-extravisionohif.dicom.azurehealthcareapis.com/v1',
+
+        qidoSupportsIncludeField: true,
+        dicomUploadEnabled: true,
+
+        pythonFunctionName: 'dicomobj',
+        pythonFunctionsBaseUrl: 'http://localhost:7071/api',
+
+        requestTransferSyntaxUID: '*',
         imageRendering: 'wadors',
         thumbnailRendering: 'wadors',
         enableStudyLazyLoad: true,
@@ -118,15 +126,10 @@ window.config = {
         supportsWildcard: false,
         staticWado: true,
         singlepart: 'bulkdata,video',
-        // whether the data source should use retrieveBulkData to grab metadata,
-        // and in case of relative path, what would it be relative to, options
-        // are in the series level or study level (some servers like series some study)
         bulkDataURI: {
           enabled: true,
           relativeResolution: 'studies',
-          transform: url => url.replace('/pixeldata.mp4', '/rendered'),
         },
-        omitQuotationForMultipartRequest: true,
       },
     },
 
@@ -268,6 +271,21 @@ window.config = {
       configuration: {
         friendlyName: 'dicom local',
       },
+    },
+  ],
+  oidc: [
+    {
+      // ~ REQUIRED
+      // Authorization Server URL
+      authority: 'https://login.microsoftonline.com/35a3348f-7453-4f4d-a2bc-6c4e6eb1845e/v2.0/',
+      client_id: '9f2139e2-d95b-45b6-a1de-8783e3419c42',
+      redirect_uri: '/callback', // `OHIFStandaloneViewer.js`
+      response_type: 'token', // "implicit"
+      scope: 'openid https://dicom.healthcareapis.azure.com/Dicom.ReadWrite', // https://dicom.healthcareapis.azure.com/Dicom.ReadWrite // email profile openid  https://dicom.healthcareapis.azure.com
+      // ~ OPTIONAL
+      post_logout_redirect_uri: '/logout-redirect.html',
+      automaticSilentRenew: true,
+      revokeAccessTokenOnSignout: true
     },
   ],
   httpErrorHandler: error => {

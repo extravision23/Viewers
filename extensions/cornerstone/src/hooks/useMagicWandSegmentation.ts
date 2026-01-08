@@ -241,7 +241,13 @@ export function useMagicWandSegmentation() {
           seriesInstanceUID,
           seed,
           options: Object.keys(options).length > 0 ? options : undefined,
+          viewportId,
         });
+
+        if (result === null) {
+          setMode('idle');
+          return;
+        }
 
         const segSeriesInstanceUID = result?.segmentation?.seriesInstanceUID;
 

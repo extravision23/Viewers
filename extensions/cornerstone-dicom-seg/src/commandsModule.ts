@@ -2,10 +2,15 @@ import dcmjs from 'dcmjs';
 import { classes, Types, utils } from '@ohif/core';
 import { cache, metaData } from '@cornerstonejs/core';
 import { segmentation as cornerstoneToolsSegmentation } from '@cornerstonejs/tools';
+import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
 import { adaptersRT, adaptersSEG } from '@cornerstonejs/adapters';
 import { createReportDialogPrompt, useUIStateStore } from '@ohif/extension-default';
 
 import PROMPT_RESPONSES from '../../default/src/utils/_shared/PROMPT_RESPONSES';
+import {
+  ensureSavedSegmentationForServerCall,
+  UserCancelledError,
+} from './utils/ensureSavedSegmentationForServerCall';
 
 const getTargetViewport = ({ viewportId, viewportGridService }) => {
   const { viewports, activeViewportId } = viewportGridService.getState();
@@ -14,6 +19,23 @@ const getTargetViewport = ({ viewportId, viewportGridService }) => {
   const viewport = viewports.get(targetViewportId);
 
   return viewport;
+};
+
+const getFunctionsBaseUrl = dataSourceConfig => {
+  return (
+    dataSourceConfig?.pythonFunctionsBaseUrl ||
+    (dataSourceConfig?.pythonFunctionName
+      ? `https://${dataSourceConfig.pythonFunctionName}.azurewebsites.net/api`
+      : undefined)
+  );
+};
+
+const buildFunctionUrl = (dataSourceConfig, functionName: string) => {
+  const baseUrl = getFunctionsBaseUrl(dataSourceConfig);
+  if (!baseUrl) {
+    throw new Error('No python functions base url configured');
+  }
+  return `${baseUrl}/${functionName}`;
 };
 
 const {
@@ -361,16 +383,13 @@ const commandsModule = ({
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
         const config = defaultDataSource.getConfig();
 
-        return fetch(
-          `https://${config.pythonFunctionName}.azurewebsites.net/api/ConvertDicomToObj`,
-          {
-            method: 'POST',
-            body: formData,
-            headers: {
-              ...getAuthHeader(defaultDataSource),
-            },
-          }
-        )
+        return fetch(buildFunctionUrl(config, 'ConvertDicomToObj'), {
+          method: 'POST',
+          body: formData,
+          headers: {
+            ...getAuthHeader(defaultDataSource),
+          },
+        })
           .then(async response => {
             if (response.ok) {
               console.log('Segmentation sent successfully!');
@@ -410,16 +429,13 @@ const commandsModule = ({
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
         const config = defaultDataSource.getConfig();
 
-        fetch(
-          `https://${config.pythonFunctionName}.azurewebsites.net/api/ConvertDicomToObjDownload`,
-          {
-            method: 'POST',
-            body: formData,
-            headers: {
-              ...getAuthHeader(defaultDataSource),
-            },
-          }
-        )
+        fetch(buildFunctionUrl(config, 'ConvertDicomToObjDownload'), {
+          method: 'POST',
+          body: formData,
+          headers: {
+            ...getAuthHeader(defaultDataSource),
+          },
+        })
           .then(async response => {
             if (response.ok) {
               // Отримуємо відповіді як blob і створюємо посилання для завантаження
@@ -451,14 +467,35 @@ const commandsModule = ({
       customWindow,
       customSegRange,
       dataSource,
+      viewportId,
     }) => {
       try {
+        // Ensure we have a saved segmentation before making the server call
+        let segmentationSeriesInstanceUID: string;
+        try {
+          const result = await ensureSavedSegmentationForServerCall({
+            viewportId,
+            servicesManager,
+            extensionManager,
+            commandsManager: { runCommand: actions },
+            storeSegmentationAction: params => actions.storeSegmentation(params),
+          });
+          segmentationSeriesInstanceUID = result.segmentationSeriesInstanceUID;
+        } catch (error) {
+          if (error instanceof UserCancelledError) {
+            console.log('User cancelled segmentation save, aborting server call');
+            return null;
+          }
+          throw error;
+        }
+
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
         const config = defaultDataSource.getConfig();
 
         const payload = {
           studyInstanceUID,
           seriesInstanceUID,
+          segmentationSeriesInstanceUID,
           preset,
           customWindow,
           customSegRange,
@@ -468,17 +505,14 @@ const commandsModule = ({
           },
         };
 
-        const response = await fetch(
-          `https://${config.pythonFunctionName}.azurewebsites.net/api/segmentbypreset`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...getAuthHeader(defaultDataSource),
-            },
-            body: JSON.stringify(payload),
-          }
-        );
+        const response = await fetch(buildFunctionUrl(config, 'SegmentByPreset'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader(defaultDataSource),
+          },
+          body: JSON.stringify(payload),
+        });
 
         if (!response.ok) {
           const text = await response.text();
@@ -500,17 +534,36 @@ const commandsModule = ({
       seed,
       options,
       dataSource,
+      viewportId,
     }) => {
       try {
+        // Ensure we have a saved segmentation before making the server call
+        let segmentationSeriesInstanceUID: string;
+        try {
+          const result = await ensureSavedSegmentationForServerCall({
+            viewportId,
+            servicesManager,
+            extensionManager,
+            storeSegmentationAction: params => actions.storeSegmentation(params),
+          });
+          segmentationSeriesInstanceUID = result.segmentationSeriesInstanceUID;
+        } catch (error) {
+          if (error instanceof UserCancelledError) {
+            console.log('User cancelled segmentation save, aborting server call');
+            return null;
+          }
+          throw error;
+        }
+
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
         const config = defaultDataSource.getConfig();
 
         // Use the same endpoint pattern as segmentByPreset
-        const endpoint = `https://${config.pythonFunctionName}.azurewebsites.net/api/segmentbymagicwand`;
-
+        const endpoint = buildFunctionUrl(config, 'SegmentByMagicWand');
         const payload: any = {
           studyInstanceUID,
           seriesInstanceUID,
+          segmentationSeriesInstanceUID,
           seed,
         };
 
@@ -543,6 +596,436 @@ const commandsModule = ({
         throw e;
       }
     },
+
+    /**
+     * Helper: Check if a segmentation is saved (has SeriesInstanceUID and is not madeInClient)
+     * @param segmentationId - The segmentation ID to check
+     * @returns Object with isSaved boolean, seriesInstanceUID, and displaySet if found
+     */
+    isSegmentationSaved: ({ segmentationId }) => {
+      const displaySet = displaySetService.getDisplaySetByUID(segmentationId);
+      // madeInClient is a runtime property that may not be in TypeScript types
+      const isSaved =
+        displaySet && displaySet.SeriesInstanceUID && !(displaySet as any).madeInClient;
+      return {
+        isSaved: !!isSaved,
+        seriesInstanceUID: displaySet?.SeriesInstanceUID || null,
+        displaySet: displaySet || null,
+      };
+    },
+
+    /**
+     * Helper: Call server-side segmentation endpoint
+     * @param params - Parameters for server call
+     * @param params.studyInstanceUID - Study Instance UID
+     * @param params.sourceSeriesInstanceUID - Source series to segment
+     * @param params.segmentationSeriesInstanceUID - Optional: existing segmentation SeriesInstanceUID (Scenario B)
+     * @param params.serverApi - Server API configuration (endpoint URL, etc.)
+     * @param params.dataSource - DataSource for auth headers
+     * @returns Promise resolving to segmentationSeriesInstanceUID
+     */
+    runServerSegmentation: async ({
+      studyInstanceUID,
+      sourceSeriesInstanceUID,
+      segmentationSeriesInstanceUID,
+      serverApi,
+      dataSource,
+    }) => {
+      const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+      const config = defaultDataSource.getConfig();
+
+      // TODO: Replace with actual server endpoint path
+      const endpoint =
+        serverApi?.endpoint ||
+        `https://${config.pythonFunctionName}.azurewebsites.net/api/serverSegmentation`;
+
+      const payload: any = {
+        studyInstanceUID,
+        seriesInstanceUID: sourceSeriesInstanceUID,
+      };
+
+      // Scenario B: include segmentationSeriesInstanceUID for update
+      if (segmentationSeriesInstanceUID) {
+        payload.segmentationSeriesInstanceUID = segmentationSeriesInstanceUID;
+      }
+
+      // Merge any additional params from serverApi
+      if (serverApi?.params) {
+        Object.assign(payload, serverApi.params);
+      }
+
+      console.log('Calling server segmentation endpoint:', endpoint, payload);
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(defaultDataSource),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        console.error('Server segmentation request failed:', response.status, text);
+        throw new Error(`Server segmentation failed: ${response.status} ${text}`);
+      }
+
+      const result = await response.json();
+      const returnedSegSeriesUID = result.segmentationSeriesInstanceUID;
+
+      if (!returnedSegSeriesUID) {
+        throw new Error('Server did not return segmentationSeriesInstanceUID');
+      }
+
+      console.log(
+        'Server segmentation successful, returned SeriesInstanceUID:',
+        returnedSegSeriesUID
+      );
+      return returnedSegSeriesUID;
+    },
+
+    /**
+     * Helper: Load or reload SEG displaySet from DICOMweb/Azure DICOM
+     * @param params - Parameters for loading
+     * @param params.studyInstanceUID - Study Instance UID
+     * @param params.segSeriesInstanceUID - Segmentation Series Instance UID
+     * @param params.dataSource - Optional dataSource (uses active if not provided)
+     * @returns Promise resolving to the loaded/updated displaySet
+     */
+    loadOrReloadSegDisplaySet: async ({ studyInstanceUID, segSeriesInstanceUID, dataSource }) => {
+      const { uiNotificationService } = servicesManager.services as AppTypes.Services;
+      const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+
+      // Check if displaySet already exists for this SeriesInstanceUID
+      const existingDisplaySets = displaySetService.getDisplaySetsForSeries(segSeriesInstanceUID);
+      const existingSegDisplaySet = existingDisplaySets.find(ds => ds.Modality === 'SEG');
+
+      if (existingSegDisplaySet) {
+        console.log(
+          'Reloading existing SEG displaySet:',
+          existingSegDisplaySet.displaySetInstanceUID
+        );
+
+        // Mark metadata as invalidated to force reload
+        displaySetService.setDisplaySetMetadataInvalidated(
+          existingSegDisplaySet.displaySetInstanceUID,
+          true
+        );
+
+        // Delete the old displaySet to force a fresh load
+        displaySetService.deleteDisplaySet(existingSegDisplaySet.displaySetInstanceUID);
+      }
+
+      // Retrieve series metadata from DICOMweb
+      try {
+        await defaultDataSource.retrieve.series.metadata({
+          StudyInstanceUID: studyInstanceUID,
+          filters: {
+            SeriesInstanceUID: segSeriesInstanceUID,
+          },
+        });
+
+        // Wait for displaySet to be created via DicomMetadataStore events
+        // Poll for up to 2 seconds with 50ms intervals
+        let newSegDisplaySet = null;
+        const maxWaitTime = 2000; // 2 seconds
+        const pollInterval = 50; // 50ms
+        const maxAttempts = maxWaitTime / pollInterval;
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          const updatedDisplaySets =
+            displaySetService.getDisplaySetsForSeries(segSeriesInstanceUID);
+          newSegDisplaySet = updatedDisplaySets.find(ds => ds.Modality === 'SEG');
+
+          if (newSegDisplaySet) {
+            break;
+          }
+
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+        }
+
+        if (!newSegDisplaySet) {
+          throw new Error(
+            `Failed to find SEG displaySet for SeriesInstanceUID: ${segSeriesInstanceUID} after ${maxWaitTime}ms`
+          );
+        }
+
+        console.log(
+          'Successfully loaded/reloaded SEG displaySet:',
+          newSegDisplaySet.displaySetInstanceUID
+        );
+        return newSegDisplaySet;
+      } catch (error) {
+        console.error('Error loading SEG displaySet:', error);
+        uiNotificationService.show({
+          title: 'Load Failed',
+          message: `Failed to load segmentation series: ${error.message}`,
+          type: 'error',
+          duration: 5000,
+        });
+        throw error;
+      }
+    },
+
+    /**
+     * Helper: Create/update cornerstone segmentation from SEG displaySet and attach to viewport
+     * @param params - Parameters for hydration
+     * @param params.segDisplaySet - The SEG displaySet to hydrate from
+     * @param params.viewportId - Target viewport ID
+     * @param params.segmentationId - Optional: existing segmentation ID to update in-place (Scenario B)
+     * @returns Promise resolving to segmentationId
+     */
+    hydrateSegmentationFromDisplaySet: async ({ segDisplaySet, viewportId, segmentationId }) => {
+      const { uiNotificationService } = servicesManager.services as AppTypes.Services;
+
+      try {
+        // Ensure displaySet is loaded
+        if (!segDisplaySet.isLoaded && segDisplaySet.load) {
+          const defaultDataSource = extensionManager.getActiveDataSource()[0];
+          const headers = getAuthHeader(defaultDataSource);
+          await segDisplaySet.load({ headers });
+        }
+
+        // Create segmentation from SEG displaySet
+        // If segmentationId is provided (Scenario B), use it to update in-place
+        // Otherwise, use displaySetInstanceUID (Scenario A)
+        const finalSegmentationId = await segmentationService.createSegmentationForSEGDisplaySet(
+          segDisplaySet,
+          {
+            type: SegmentationRepresentations.Labelmap,
+            segmentationId: segmentationId || segDisplaySet.displaySetInstanceUID,
+          }
+        );
+
+        console.log('Hydrated segmentation from displaySet:', finalSegmentationId);
+        return finalSegmentationId;
+      } catch (error) {
+        console.error('Error hydrating segmentation from displaySet:', error);
+        uiNotificationService.show({
+          title: 'Hydration Failed',
+          message: `Failed to create segmentation: ${error.message}`,
+          type: 'error',
+          duration: 5000,
+        });
+        throw error;
+      }
+    },
+
+    /**
+     * Helper: Ensure Labelmap representation is attached to viewport and set as active
+     * @param params - Parameters
+     * @param params.viewportId - Target viewport ID
+     * @param params.segmentationId - Segmentation ID to apply
+     */
+    applySegmentationToViewport: async ({ viewportId, segmentationId }) => {
+      const { uiNotificationService } = servicesManager.services as AppTypes.Services;
+
+      try {
+        // Check if representation already exists
+        const existingReps = segmentationService.getSegmentationRepresentations(viewportId);
+        const hasLabelmapRep = existingReps.some(
+          rep =>
+            rep.segmentationId === segmentationId &&
+            rep.type === SegmentationRepresentations.Labelmap
+        );
+
+        if (!hasLabelmapRep) {
+          // Add Labelmap representation to viewport
+          await segmentationService.addSegmentationRepresentation(viewportId, {
+            segmentationId,
+            type: SegmentationRepresentations.Labelmap,
+          });
+          console.log('Added Labelmap representation to viewport:', viewportId);
+        }
+
+        // Set as active segmentation
+        segmentationService.setActiveSegmentation(viewportId, segmentationId);
+        console.log('Set active segmentation:', segmentationId, 'for viewport:', viewportId);
+      } catch (error) {
+        console.error('Error applying segmentation to viewport:', error);
+        uiNotificationService.show({
+          title: 'Apply Failed',
+          message: `Failed to apply segmentation to viewport: ${error.message}`,
+          type: 'error',
+          duration: 5000,
+        });
+        throw error;
+      }
+    },
+
+    /**
+     * Main function: Run server-side segmentation and update viewport
+     * Handles both Scenario A (unsaved) and Scenario B (saved) segmentations
+     *
+     * @param params - Parameters
+     * @param params.viewportId - Optional viewport ID (uses active if not provided)
+     * @param params.servicesManager - Services manager (already available in closure, but for consistency)
+     * @param params.extensionManager - Extension manager (already available in closure, but for consistency)
+     * @param params.serverApi - Server API configuration with endpoint and optional params
+     * @param params.studyInstanceUID - Study Instance UID (required)
+     * @param params.sourceSeriesInstanceUID - Source series to segment (required)
+     * @param params.dataSource - Optional dataSource
+     * @returns Promise resolving to object with segmentationId and segmentationSeriesInstanceUID
+     */
+    runServerSegmentationAndUpdateViewport: async ({
+      viewportId,
+      servicesManager: _servicesManager,
+      extensionManager: _extensionManager,
+      serverApi,
+      studyInstanceUID,
+      sourceSeriesInstanceUID,
+      dataSource,
+    }) => {
+      const { uiNotificationService, uiDialogService } =
+        servicesManager.services as AppTypes.Services;
+
+      try {
+        // Step 1: Get target viewport
+        const { activeViewportId } = viewportGridService.getState();
+        const targetViewportId = viewportId || activeViewportId;
+
+        if (!targetViewportId) {
+          throw new Error('No active viewport found');
+        }
+
+        const viewport = getTargetViewport({ viewportId: targetViewportId, viewportGridService });
+        if (!viewport) {
+          throw new Error(`Viewport not found: ${targetViewportId}`);
+        }
+
+        // Step 2: Get active segmentation for viewport
+        const activeSegmentation = segmentationService.getActiveSegmentation(targetViewportId);
+        if (!activeSegmentation) {
+          uiNotificationService.show({
+            title: 'No Active Segmentation',
+            message: 'Please select or create a segmentation first',
+            type: 'warning',
+            duration: 5000,
+          });
+          throw new Error('No active segmentation found in viewport');
+        }
+
+        const activeSegmentationId = activeSegmentation.segmentationId;
+
+        // Step 3: Determine scenario (A or B)
+        const { isSaved, seriesInstanceUID: existingSegSeriesUID } = actions.isSegmentationSaved({
+          segmentationId: activeSegmentationId,
+        });
+
+        console.log('Server segmentation scenario:', isSaved ? 'B (saved)' : 'A (unsaved)');
+
+        // For Scenario A, check if segmentation is empty (based on segments, not volume cache)
+        let segmentationSeriesInstanceUID: string | undefined;
+        if (!isSaved) {
+          const segmentation = segmentationService.getSegmentation(activeSegmentationId);
+          const hasSegments =
+            segmentation?.segments && Object.keys(segmentation.segments).length > 0;
+
+          if (!hasSegments) {
+            // Empty unsaved segmentation - call server without segmentationSeriesInstanceUID
+            segmentationSeriesInstanceUID = undefined;
+          } else {
+            // Non-empty unsaved - should have been saved first
+            // But for server call, we'll proceed without it (server will create new)
+            segmentationSeriesInstanceUID = undefined;
+          }
+        } else {
+          // Scenario B: Use existing SeriesInstanceUID
+          segmentationSeriesInstanceUID = existingSegSeriesUID;
+        }
+
+        // Step 4: Call server segmentation endpoint
+        uiNotificationService.show({
+          title: 'Processing',
+          message: 'Running server-side segmentation...',
+          type: 'info',
+          duration: 3000,
+        });
+
+        const returnedSegSeriesUID = await actions.runServerSegmentation({
+          studyInstanceUID,
+          sourceSeriesInstanceUID,
+          segmentationSeriesInstanceUID,
+          serverApi,
+          dataSource,
+        });
+
+        // Step 5: Load/reload SEG displaySet from DICOMweb
+        const segDisplaySet = await actions.loadOrReloadSegDisplaySet({
+          studyInstanceUID,
+          segSeriesInstanceUID: returnedSegSeriesUID,
+          dataSource,
+        });
+
+        // Step 6: Handle duplicate segmentations
+        // Remove old representation before loading new one to avoid duplicates
+        const existingReps = segmentationService.getSegmentationRepresentations(targetViewportId);
+        const oldRep = existingReps.find(
+          rep =>
+            rep.segmentationId === activeSegmentationId &&
+            rep.type === SegmentationRepresentations.Labelmap
+        );
+
+        if (oldRep) {
+          // Remove old representation before adding new one
+          segmentationService.removeSegmentationRepresentations(targetViewportId, {
+            segmentationId: activeSegmentationId,
+            type: SegmentationRepresentations.Labelmap,
+          });
+          console.log('Removed old segmentation representation to avoid duplicates');
+        }
+
+        // Step 7: Hydrate segmentation from displaySet
+        // For Scenario B: use existing segmentationId to update in-place
+        // For Scenario A: let it create new segmentation using displaySetInstanceUID
+        const hydratedSegmentationId = await actions.hydrateSegmentationFromDisplaySet({
+          segDisplaySet,
+          viewportId: targetViewportId,
+          segmentationId: isSaved ? activeSegmentationId : undefined, // Scenario B: update in-place
+        });
+
+        // Step 8: Apply segmentation to viewport (ensure Labelmap rep and set active)
+        await actions.applySegmentationToViewport({
+          viewportId: targetViewportId,
+          segmentationId: hydratedSegmentationId,
+        });
+
+        // Step 9: Success notification
+        uiNotificationService.show({
+          title: 'Success',
+          message: 'Server segmentation completed and loaded',
+          type: 'success',
+          duration: 3000,
+        });
+
+        console.log('Server segmentation flow completed successfully:', {
+          scenario: isSaved ? 'B' : 'A',
+          segmentationId: hydratedSegmentationId,
+          segmentationSeriesInstanceUID: returnedSegSeriesUID,
+        });
+
+        return {
+          segmentationId: hydratedSegmentationId,
+          segmentationSeriesInstanceUID: returnedSegSeriesUID,
+        };
+      } catch (error) {
+        console.error('Error in runServerSegmentationAndUpdateViewport:', error);
+
+        if (error instanceof UserCancelledError) {
+          return null;
+        }
+
+        uiNotificationService.show({
+          title: 'Server Segmentation Failed',
+          message: error.message || 'An error occurred during server-side segmentation',
+          type: 'error',
+          duration: 5000,
+        });
+
+        throw error;
+      }
+    },
   };
 
   const definitions = {
@@ -556,6 +1039,14 @@ const commandsModule = ({
     downloadObj: actions.downloadObj,
     segmentByPreset: actions.segmentByPreset,
     magicWandSegmentation: actions.magicWandSegmentation,
+    // Server-side segmentation helpers
+    isSegmentationSaved: actions.isSegmentationSaved,
+    runServerSegmentation: actions.runServerSegmentation,
+    loadOrReloadSegDisplaySet: actions.loadOrReloadSegDisplaySet,
+    hydrateSegmentationFromDisplaySet: actions.hydrateSegmentationFromDisplaySet,
+    applySegmentationToViewport: actions.applySegmentationToViewport,
+    // Main server-side segmentation function
+    runServerSegmentationAndUpdateViewport: actions.runServerSegmentationAndUpdateViewport,
   };
 
   return {
