@@ -1,5 +1,5 @@
 import dcmjs from 'dcmjs';
-import { classes, Types, utils } from '@ohif/core';
+import { Types } from '@ohif/core';
 import { cache, metaData } from '@cornerstonejs/core';
 import { segmentation as cornerstoneToolsSegmentation } from '@cornerstonejs/tools';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
@@ -9,9 +9,9 @@ import { DicomMetadataStore } from '@ohif/core';
 
 import PROMPT_RESPONSES from '../../default/src/utils/_shared/PROMPT_RESPONSES';
 import {
-  ensureSavedSegmentationForServerCall,
+  getActiveSegmentationSeriesForServerCall,
   UserCancelledError,
-} from './utils/ensureSavedSegmentationForServerCall';
+} from './utils/getActiveSegmentationSeriesForServerCall';
 
 const getTargetViewport = ({ viewportId, viewportGridService }) => {
   const { viewports, activeViewportId } = viewportGridService.getState();
@@ -264,7 +264,7 @@ const commandsModule = ({
         try {
           const selectedDataSourceConfig = selectedDataSource
             ? extensionManager.getDataSources(selectedDataSource)[0]
-            : defaultDataSource[0];
+            : defaultDataSource;
 
           const args = {
             segmentationId,
@@ -369,7 +369,7 @@ const commandsModule = ({
 
         const dataset = generatedSegmentation.dataset;
 
-        const dicomBlob = datasetToBlob(dataset);
+        const dicomBlob = dcmjs.data.datasetToBlob(dataset);
 
         const formData = new FormData();
         formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
@@ -414,7 +414,7 @@ const commandsModule = ({
         }
 
         const dataset = generatedSegmentation.dataset;
-        const dicomBlob = datasetToBlob(dataset);
+        const dicomBlob = dcmjs.data.datasetToBlob(dataset);
 
         // Формуємо FormData з DICOM файлом
         const formData = new FormData();
@@ -467,7 +467,7 @@ const commandsModule = ({
         // Ensure we have a saved segmentation before making the server call
         let segmentationSeriesInstanceUID: string;
         try {
-          const result = await ensureSavedSegmentationForServerCall({
+          const result = await getActiveSegmentationSeriesForServerCall({
             viewportId,
             servicesManager,
             extensionManager,
@@ -534,7 +534,7 @@ const commandsModule = ({
         // Ensure we have a saved segmentation before making the server call
         let segmentationSeriesInstanceUID: string;
         try {
-          const result = await ensureSavedSegmentationForServerCall({
+          const result = await getActiveSegmentationSeriesForServerCall({
             viewportId,
             servicesManager,
             extensionManager,
@@ -945,14 +945,24 @@ const commandsModule = ({
           dataSource,
         });
 
-        // Step 5: Load/reload SEG displaySet from DICOMweb
+        // Step 5: Remove active saved segmentation from left panel before refetching
+        // This prevents duplication when the updated segmentation is loaded
+        if (isSaved) {
+          const activeSegDisplaySet = displaySetService.getDisplaySetByUID(activeSegmentationId);
+          if (activeSegDisplaySet) {
+            displaySetService.deleteDisplaySet(activeSegmentationId);
+            console.log('Removed active saved segmentation from left panel before refetching');
+          }
+        }
+
+        // Step 6: Load/reload SEG displaySet from DICOMweb
         const segDisplaySet = await actions.loadOrReloadSegDisplaySet({
           studyInstanceUID,
           segSeriesInstanceUID: returnedSegSeriesUID,
           dataSource,
         });
 
-        // Step 6: Handle duplicate segmentations
+        // Step 7: Handle duplicate segmentations
         // Remove old representation before loading new one to avoid duplicates
         const existingReps = segmentationService.getSegmentationRepresentations(targetViewportId);
         const oldRep = existingReps.find(
@@ -970,7 +980,7 @@ const commandsModule = ({
           console.log('Removed old segmentation representation to avoid duplicates');
         }
 
-        // Step 7: Hydrate segmentation from displaySet
+        // Step 8: Hydrate segmentation from displaySet
         // For Scenario B: use existing segmentationId to update in-place
         // For Scenario A: let it create new segmentation using displaySetInstanceUID
         const hydratedSegmentationId = await actions.hydrateSegmentationFromDisplaySet({
@@ -979,13 +989,13 @@ const commandsModule = ({
           segmentationId: isSaved ? activeSegmentationId : undefined, // Scenario B: update in-place
         });
 
-        // Step 8: Apply segmentation to viewport (ensure Labelmap rep and set active)
+        // Step 9: Apply segmentation to viewport (ensure Labelmap rep and set active)
         await actions.applySegmentationToViewport({
           viewportId: targetViewportId,
           segmentationId: hydratedSegmentationId,
         });
 
-        // Step 9: Success notification
+        // Step 10: Success notification
         uiNotificationService.show({
           title: 'Success',
           message: 'Server segmentation completed and loaded',
@@ -1020,6 +1030,178 @@ const commandsModule = ({
         throw error;
       }
     },
+
+    /**
+     * Deletes a segmentation series from DICOM storage
+     * Shows a confirmation dialog before deletion
+     * @param params - Parameters for deletion
+     * @param params.displaySetInstanceUID - Display set instance UID of the segmentation to delete
+     */
+    deleteSegmentation: async ({ displaySetInstanceUID }) => {
+      const { uiNotificationService, uiViewportDialogService } =
+        servicesManager.services as AppTypes.Services;
+
+      if (!displaySetInstanceUID) {
+        uiNotificationService.show({
+          title: 'Delete Failed',
+          message: 'No display set selected for deletion',
+          type: 'error',
+          duration: 5000,
+        });
+        return;
+      }
+
+      // Get the display set
+      const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+      if (!displaySet) {
+        uiNotificationService.show({
+          title: 'Delete Failed',
+          message: 'Display set not found',
+          type: 'error',
+          duration: 5000,
+        });
+        return;
+      }
+
+      // Only allow deletion of SEG modality
+      if (displaySet.Modality !== 'SEG') {
+        uiNotificationService.show({
+          title: 'Delete Failed',
+          message: 'Only segmentation series can be deleted',
+          type: 'error',
+          duration: 5000,
+        });
+        return;
+      }
+
+      const segmentationName =
+        displaySet.SeriesDescription || displaySet.label || displaySetInstanceUID;
+      const StudyInstanceUID = displaySet.StudyInstanceUID;
+      const SeriesInstanceUID = displaySet.SeriesInstanceUID;
+
+      if (!StudyInstanceUID || !SeriesInstanceUID) {
+        uiNotificationService.show({
+          title: 'Delete Failed',
+          message: 'Missing study or series information',
+          type: 'error',
+          duration: 5000,
+        });
+        return;
+      }
+
+      // Get active viewport for the dialog
+      const { activeViewportId } = viewportGridService.getState();
+      if (!activeViewportId) {
+        uiNotificationService.show({
+          title: 'Delete Failed',
+          message: 'No active viewport found',
+          type: 'error',
+          duration: 5000,
+        });
+        return;
+      }
+
+      // Show confirmation dialog
+      return new Promise((resolve, reject) => {
+        const dialogId = 'deleteSegmentationConfirmation';
+        const actions = [
+          {
+            id: 'cancel',
+            type: 'secondary',
+            text: 'No',
+            value: false,
+          },
+          {
+            id: 'confirm',
+            type: 'primary',
+            text: 'Yes',
+            value: true,
+          },
+        ];
+
+        const onSubmit = async (result: any) => {
+          uiViewportDialogService.hide();
+          if (result === true) {
+            try {
+              // Get the active data source
+              const [dataSource] = extensionManager.getActiveDataSource();
+              if (!dataSource || !dataSource.retrieve?.customClient?.deleteSeries) {
+                throw new Error('Data source does not support series deletion');
+              }
+
+              // Delete the series
+              await dataSource.retrieve.customClient.deleteSeries(
+                StudyInstanceUID,
+                SeriesInstanceUID
+              );
+
+              // Remove the display set from the service
+              displaySetService.deleteDisplaySet(displaySetInstanceUID);
+
+              // Remove segmentation from viewports if it's currently displayed
+              const { viewports } = viewportGridService.getState();
+              viewports.forEach((viewport, viewportId) => {
+                if (viewport.displaySetInstanceUIDs?.includes(displaySetInstanceUID)) {
+                  // Remove this display set from the viewport
+                  const updatedDisplaySetInstanceUIDs = viewport.displaySetInstanceUIDs.filter(
+                    uid => uid !== displaySetInstanceUID
+                  );
+                  viewportGridService.setDisplaySetsForViewport({
+                    viewportId,
+                    displaySetInstanceUIDs: updatedDisplaySetInstanceUIDs,
+                  });
+                }
+              });
+
+              // Remove from segmentation service if it exists
+              try {
+                segmentationService.remove(displaySetInstanceUID);
+              } catch (e) {
+                // Segmentation might not be in the service, ignore
+              }
+
+              uiNotificationService.show({
+                title: 'Success',
+                message: `Segmentation ${segmentationName} deleted successfully`,
+                type: 'success',
+                duration: 3000,
+              });
+
+              resolve(true);
+            } catch (error) {
+              console.error('Error deleting segmentation:', error);
+              uiNotificationService.show({
+                title: 'Delete Failed',
+                message: error.message || 'Failed to delete segmentation',
+                type: 'error',
+                duration: 5000,
+              });
+              reject(error);
+            }
+          } else {
+            resolve(false);
+          }
+        };
+
+        uiViewportDialogService.show({
+          id: dialogId,
+          viewportId: activeViewportId,
+          type: 'warning',
+          message: `Are you sure you want to delete the segmentation ${segmentationName}?`,
+          actions,
+          onSubmit,
+          onOutsideClick: () => {
+            uiViewportDialogService.hide();
+            resolve(false);
+          },
+          onKeyPress: (event: KeyboardEvent) => {
+            if (event.key === 'Enter') {
+              onSubmit(true);
+            }
+          },
+        });
+      });
+    },
   };
 
   const definitions = {
@@ -1041,6 +1223,8 @@ const commandsModule = ({
     applySegmentationToViewport: actions.applySegmentationToViewport,
     // Main server-side segmentation function
     runServerSegmentationAndUpdateViewport: actions.runServerSegmentationAndUpdateViewport,
+    // Delete segmentation
+    deleteSegmentation: actions.deleteSegmentation,
   };
 
   return {

@@ -17,6 +17,12 @@ export default {
       iconName: 'ViewportViews',
       commands: 'addDisplaySetAsLayer',
     },
+    {
+      id: 'deleteSegmentation',
+      label: i18n.t('StudyBrowser:Delete'),
+      iconName: 'Delete',
+      commands: 'deleteSegmentation',
+    },
   ],
   'studyBrowser.sortFunctions': [
     {
