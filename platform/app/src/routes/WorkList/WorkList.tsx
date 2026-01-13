@@ -435,7 +435,11 @@ function WorkList({
                   return isValidB - isValidA;
                 })
               : appConfig.loadedModes
-            ).map((mode, i) => {
+            ).filter(mode => {
+                // Only show "Basic Viewer" and "Segmentation" buttons
+                const allowedModes = ['Basic Viewer', 'Segmentation'];
+                return mode.displayName && allowedModes.includes(mode.displayName);
+              }).map((mode, i) => {
               if (mode.hide) {
                 // Hide this mode from display
                 return null;
