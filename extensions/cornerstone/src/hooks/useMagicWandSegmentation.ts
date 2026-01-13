@@ -255,6 +255,23 @@ export function useMagicWandSegmentation() {
           throw new Error('Server did not return segmentation series information.');
         }
 
+        // Remove active saved segmentation from left panel before refetching
+        // This prevents duplication when the updated segmentation is loaded
+        const activeSegmentation = segmentationService.getActiveSegmentation(viewportId);
+        if (activeSegmentation) {
+          const activeSegmentationId = activeSegmentation.segmentationId;
+          const activeSegDisplaySet = displaySetService.getDisplaySetByUID(activeSegmentationId);
+          // Check if segmentation is saved (has SeriesInstanceUID and is not madeInClient)
+          const isSaved =
+            activeSegDisplaySet &&
+            activeSegDisplaySet.SeriesInstanceUID &&
+            !(activeSegDisplaySet as any).madeInClient;
+          if (isSaved) {
+            displaySetService.deleteDisplaySet(activeSegmentationId);
+            console.log('Removed active saved segmentation from left panel before refetching');
+          }
+        }
+
         // Refresh study/series metadata (same as preset flow)
         const activeDataSourceArray = extensionManager.getActiveDataSource?.() ?? [];
         const activeDataSource = activeDataSourceArray?.[0];
