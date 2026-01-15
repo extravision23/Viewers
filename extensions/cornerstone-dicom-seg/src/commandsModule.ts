@@ -58,6 +58,65 @@ function getAuthHeader(dataSource) {
   return bearer ? { Authorization: bearer } : {};
 }
 
+/**
+ * Gets the numbers of visible segments for a segmentation
+ * @param segmentationId - The segmentation ID
+ * @param segmentationService - The segmentation service
+ * @param viewportGridService - The viewport grid service
+ * @returns Array of visible segment numbers (starting from 1)
+ */
+function getVisibleSegmentNumbers(
+  segmentationId: string,
+  segmentationService: any,
+  viewportGridService: any
+): number[] {
+  try {
+    const segmentation = segmentationService.getSegmentation(segmentationId);
+    if (!segmentation || !segmentation.segments) {
+      return [];
+    }
+
+    // Get viewport IDs that have this segmentation
+    const viewportIds = segmentationService.getViewportIdsWithSegmentation(segmentationId);
+    if (viewportIds.length === 0) {
+      // Fallback to active viewport
+      const { activeViewportId } = viewportGridService.getState();
+      if (!activeViewportId) {
+        return [];
+      }
+      viewportIds.push(activeViewportId);
+    }
+
+    const viewportId = viewportIds[0];
+    const segmentIndices = Object.keys(segmentation.segments)
+      .map(index => parseInt(index, 10))
+      .filter(index => index > 0); // Filter out segment 0 which is typically background
+
+    const visibleSegmentNumbers: number[] = [];
+
+    for (const segmentIndex of segmentIndices) {
+      // Check visibility using cornerstone tools
+      const isVisible = cornerstoneToolsSegmentation.config.visibility.getSegmentIndexVisibility(
+        viewportId,
+        {
+          segmentationId,
+          type: SegmentationRepresentations.Labelmap,
+        },
+        segmentIndex
+      );
+
+      if (isVisible) {
+        visibleSegmentNumbers.push(segmentIndex);
+      }
+    }
+
+    return visibleSegmentNumbers.sort((a, b) => a - b); // Sort in ascending order
+  } catch (error) {
+    console.error('Error getting visible segment numbers:', error);
+    return [];
+  }
+}
+
 const commandsModule = ({
   servicesManager,
   extensionManager,
@@ -355,62 +414,128 @@ const commandsModule = ({
         setUIState('activeSegmentationUtility', buttonId);
       }
     },
-    sendToGlasses: ({ segmentationId, dataSource }) => {
+    sendToGlasses: async ({ segmentationId, dataSource }) => {
+      const { uiNotificationService } = servicesManager.services as AppTypes.Services;
+
+      // Show loading notification and track its ID
+      const loadingNotificationId = uiNotificationService.show({
+        title: 'Processing',
+        message: 'Converting segmentation to OBJ format...',
+        type: 'info',
+        duration: 0, // Don't auto-dismiss
+      });
+
       try {
         const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
+        if (!segmentationInOHIF) {
+          throw new Error('Segmentation not found');
+        }
+
         const generatedSegmentation = actions.generateSegmentation({
           segmentationId,
         });
 
         if (!generatedSegmentation || !generatedSegmentation.dataset) {
-          console.error('Failed to generate segmentation dataset.');
-          return;
+          throw new Error('Failed to generate segmentation dataset.');
         }
 
         const dataset = generatedSegmentation.dataset;
-
         const dicomBlob = dcmjs.data.datasetToBlob(dataset);
 
         const formData = new FormData();
         formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
 
+        // Get visible segment numbers and add to formData
+        const selectedSegmentNumbers = getVisibleSegmentNumbers(
+          segmentationId,
+          segmentationService,
+          viewportGridService
+        );
+        if (selectedSegmentNumbers?.length) {
+          formData.append('segments', selectedSegmentNumbers.join(','));
+        }
+
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
         const config = defaultDataSource.getConfig();
 
-        return fetch(buildFunctionUrl(config, 'ConvertDicomToObj'), {
+        const response = await fetch(buildFunctionUrl(config, 'ConvertDicomToObj'), {
           method: 'POST',
           body: formData,
           headers: {
             ...getAuthHeader(defaultDataSource),
           },
-        })
-          .then(async response => {
-            if (response.ok) {
-              console.log('Segmentation sent successfully!');
-              const result = await response.text();
-              console.log('Server response:', result);
-            } else {
-              console.error(
-                `Error sending segmentation. Status: ${response.status}, Text: ${response.statusText}`
-              );
+        });
+
+        // Dismiss loading notification
+        if (loadingNotificationId) {
+          uiNotificationService.hide(loadingNotificationId);
+        }
+
+        if (response.ok) {
+          const result = await response.text();
+          console.log('Segmentation sent successfully!', result);
+
+          // Refresh display sets to show any updates
+          const displaySet = displaySetService.getDisplaySetByUID(segmentationId);
+          if (displaySet?.StudyInstanceUID) {
+            try {
+              await defaultDataSource.retrieve.series.metadata({
+                StudyInstanceUID: displaySet.StudyInstanceUID,
+              });
+            } catch (refreshError) {
+              console.warn('Failed to refresh display sets:', refreshError);
             }
-          })
-          .catch(error => {
-            console.error('Error sending segmentation:', error);
+          }
+
+          // Show success notification
+          uiNotificationService.show({
+            title: 'Success',
+            message: 'Segmentation converted and sent successfully',
+            type: 'success',
+            duration: 3000,
           });
+        } else {
+          const errorText = await response.text().catch(() => response.statusText);
+          throw new Error(`Server error: ${response.status} ${errorText}`);
+        }
       } catch (error) {
-        console.error('Unexpected error in sendToGlasses:', error);
+        console.error('Error in sendToGlasses:', error);
+
+        // Dismiss loading notification if still showing
+        if (loadingNotificationId) {
+          uiNotificationService.hide(loadingNotificationId);
+        }
+
+        uiNotificationService.show({
+          title: 'Conversion Failed',
+          message: error.message || 'Failed to convert segmentation to OBJ format',
+          type: 'error',
+          duration: 5000,
+        });
       }
     },
-    downloadObj: ({ segmentationId, dataSource }) => {
+    downloadObj: async ({ segmentationId, dataSource }) => {
+      const { uiNotificationService } = servicesManager.services as AppTypes.Services;
+
+      // Show loading notification and track its ID
+      const loadingNotificationId = uiNotificationService.show({
+        title: 'Processing',
+        message: 'Converting segmentation to OBJ format...',
+        type: 'info',
+        duration: 0, // Don't auto-dismiss
+      });
+
       try {
         // Отримання даних сегментації та генерація DICOM Blob
         const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
+        if (!segmentationInOHIF) {
+          throw new Error('Segmentation not found');
+        }
+
         const generatedSegmentation = actions.generateSegmentation({ segmentationId });
 
         if (!generatedSegmentation || !generatedSegmentation.dataset) {
-          console.error('Failed to generate segmentation dataset.');
-          return;
+          throw new Error('Failed to generate segmentation dataset.');
         }
 
         const dataset = generatedSegmentation.dataset;
@@ -420,38 +545,81 @@ const commandsModule = ({
         const formData = new FormData();
         formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
 
+        // Get visible segment numbers and add to formData
+        const selectedSegmentNumbers = getVisibleSegmentNumbers(
+          segmentationId,
+          segmentationService,
+          viewportGridService
+        );
+        if (selectedSegmentNumbers?.length) {
+          formData.append('segments', selectedSegmentNumbers.join(','));
+        }
+
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
         const config = defaultDataSource.getConfig();
 
-        fetch(buildFunctionUrl(config, 'ConvertDicomToObjDownload'), {
+        const response = await fetch(buildFunctionUrl(config, 'ConvertDicomToObjDownload'), {
           method: 'POST',
           body: formData,
           headers: {
             ...getAuthHeader(defaultDataSource),
           },
-        })
-          .then(async response => {
-            if (response.ok) {
-              // Отримуємо відповіді як blob і створюємо посилання для завантаження
-              const blob = await response.blob();
-              const url = window.URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `${segmentationInOHIF.label}.obj`;
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-              window.URL.revokeObjectURL(url);
-              console.log('OBJ file downloaded successfully!');
-            } else {
-              console.error(`Error downloading OBJ file. Status: ${response.status}`);
+        });
+
+        // Dismiss loading notification
+        if (loadingNotificationId) {
+          uiNotificationService.hide(loadingNotificationId);
+        }
+
+        if (response.ok) {
+          // Отримуємо відповіді як blob і створюємо посилання для завантаження
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${segmentationInOHIF.label}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+
+          // Refresh display sets to show any updates
+          const displaySet = displaySetService.getDisplaySetByUID(segmentationId);
+          if (displaySet?.StudyInstanceUID) {
+            try {
+              await defaultDataSource.retrieve.series.metadata({
+                StudyInstanceUID: displaySet.StudyInstanceUID,
+              });
+            } catch (refreshError) {
+              console.warn('Failed to refresh display sets:', refreshError);
             }
-          })
-          .catch(error => {
-            console.error('Error downloading OBJ file:', error);
+          }
+
+          // Show success notification
+          uiNotificationService.show({
+            title: 'Success',
+            message: 'OBJ file downloaded successfully',
+            type: 'success',
+            duration: 3000,
           });
+        } else {
+          const errorText = await response.text().catch(() => response.statusText);
+          throw new Error(`Server error: ${response.status} ${errorText}`);
+        }
       } catch (error) {
-        console.error('Unexpected error in downloadObj:', error);
+        console.error('Error in downloadObj:', error);
+
+        // Dismiss loading notification if still showing
+        if (loadingNotificationId) {
+          uiNotificationService.hide(loadingNotificationId);
+        }
+
+        uiNotificationService.show({
+          title: 'Download Failed',
+          message: error.message || 'Failed to download OBJ file',
+          type: 'error',
+          duration: 5000,
+        });
       }
     },
     segmentByPreset: async ({
@@ -590,6 +758,66 @@ const commandsModule = ({
         throw e;
       }
     },
+    oneClickSegmentation: async ({
+      studyInstanceUID,
+      seriesInstanceUID,
+      apiPath,
+      dataSource,
+      viewportId,
+    }) => {
+      try {
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
+
+        if (!config?.pythonFunctionName) {
+          throw new Error('Missing pythonFunctionName in data source config.');
+        }
+
+        const url = buildFunctionUrl(config, apiPath);
+        let segmentationSeriesInstanceUID;
+        try {
+          const result = await getActiveSegmentationSeriesForServerCall({
+            viewportId,
+            servicesManager,
+            extensionManager,
+            storeSegmentationAction: params => actions.storeSegmentation(params),
+          });
+          segmentationSeriesInstanceUID = result.segmentationSeriesInstanceUID;
+        } catch (error) {
+          if (error instanceof UserCancelledError) {
+            console.log('User cancelled segmentation save, aborting server call');
+            return null;
+          }
+          throw error;
+        }
+
+        // Build payload with studyId and seriesId (backend expects these exact names)
+        const payload: any = {
+          studyId: studyInstanceUID,
+          seriesId: seriesInstanceUID,
+          segmentationSeriesInstanceUID,
+        };
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader(defaultDataSource),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(`Status ${response.status}${text ? `: ${text}` : ''}`);
+        }
+
+        return { success: true };
+      } catch (e) {
+        console.error('Error in oneClickSegmentation:', e);
+        throw e;
+      }
+    },
 
     /**
      * Helper: Check if a segmentation is saved (has SeriesInstanceUID and is not madeInClient)
@@ -627,12 +855,7 @@ const commandsModule = ({
     }) => {
       const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
       const config = defaultDataSource.getConfig();
-
-      // TODO: Replace with actual server endpoint path
-      const endpoint =
-        serverApi?.endpoint ||
-        `https://${config.pythonFunctionName}.azurewebsites.net/api/serverSegmentation`;
-
+      const endpoint = buildFunctionUrl(config, 'serverSegmentation');
       const payload: any = {
         studyInstanceUID,
         seriesInstanceUID: sourceSeriesInstanceUID,
@@ -1215,6 +1438,7 @@ const commandsModule = ({
     downloadObj: actions.downloadObj,
     segmentByPreset: actions.segmentByPreset,
     magicWandSegmentation: actions.magicWandSegmentation,
+    oneClickSegmentation: actions.oneClickSegmentation,
     // Server-side segmentation helpers
     isSegmentationSaved: actions.isSegmentationSaved,
     runServerSegmentation: actions.runServerSegmentation,
