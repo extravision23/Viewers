@@ -50,10 +50,6 @@ const PRESETS: CTPreset[] = [
   },
 ];
 
-function getAuthHeader(dataSource) {
-  const bearer = dataSource?.retrieve?.customClient?.headers?.Authorization;
-  return bearer ? { Authorization: bearer } : {};
-}
 
 export default function ServerSideSegmentationPanel(props: ServerSideSegmentationPanelProps) {
   const { servicesManager, extensionManager, commandsManager } = useSystem();
@@ -95,33 +91,6 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
     );
   };
 
-  const getActiveStudyAndSeriesIds = () => {
-    const { viewportGridService, displaySetService } = servicesManager.services;
-    const viewportId = viewportGridService.getActiveViewportId();
-    const { viewports } = viewportGridService.getState();
-    const viewport = viewports.get(viewportId);
-
-    if (!viewport?.displaySetInstanceUIDs?.length) {
-      return null;
-    }
-
-    const displaySetInstanceUID = viewport.displaySetInstanceUIDs[0];
-    const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
-
-    if (!displaySet) {
-      return null;
-    }
-
-    const { StudyInstanceUID, SeriesInstanceUID } = displaySet;
-    if (!StudyInstanceUID || !SeriesInstanceUID) {
-      return null;
-    }
-
-    // Backend expects these exact parameter names:
-    // - studyId: StudyInstanceUID
-    // - seriesId: SeriesInstanceUID
-    return { studyId: StudyInstanceUID, seriesId: SeriesInstanceUID };
-  };
 
   const runSegmentationByPreset = async () => {
     if (isRunningByPreset || selectedPresets.length === 0) {
@@ -279,8 +248,12 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
       return;
     }
 
-    const ids = getActiveStudyAndSeriesIds();
-    if (!ids) {
+    const { viewportGridService, displaySetService } = servicesManager.services;
+    const viewportId = viewportGridService.getActiveViewportId();
+    const { viewports } = viewportGridService.getState();
+    const viewport = viewports.get(viewportId);
+
+    if (!viewport?.displaySetInstanceUIDs?.length) {
       uiNotificationService?.show({
         title: label,
         message: 'No active viewport/series found. Click a viewport first.',
@@ -289,26 +262,20 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
       return;
     }
 
-    if (!activeDataSource?.getConfig) {
+    const displaySetInstanceUID = viewport.displaySetInstanceUIDs[0];
+    const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+
+    if (!displaySet) {
       uiNotificationService?.show({
         title: label,
-        message: 'No active data source found.',
+        message: 'No display set found for active viewport.',
         type: 'error',
       });
       return;
     }
 
-    const config = activeDataSource.getConfig();
-    if (!config?.pythonFunctionName) {
-      uiNotificationService?.show({
-        title: label,
-        message: 'Missing pythonFunctionName in data source config.',
-        type: 'error',
-      });
-      return;
-    }
-
-    const url = `https://${config.pythonFunctionName}.azurewebsites.net/api/${apiPath}`;
+    const { StudyInstanceUID: studyInstanceUID, SeriesInstanceUID: seriesInstanceUID } =
+      displaySet;
 
     try {
       setIsRunningOneClick(true);
@@ -318,19 +285,12 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
         type: 'info',
       });
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeader(activeDataSource),
-        },
-        body: JSON.stringify(ids),
+      await commandsManager.runCommand('oneClickSegmentation', {
+        studyInstanceUID,
+        seriesInstanceUID,
+        apiPath,
+        viewportId,
       });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`Status ${res.status}${text ? `: ${text}` : ''}`);
-      }
 
       uiNotificationService?.show({
         title: label,
