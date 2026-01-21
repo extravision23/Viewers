@@ -1123,6 +1123,9 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       });
     });
 
+    // Note: Volume hiding for segment-only viewports is now handled in _setSegmentationPresentation
+    // after segmentation representations are added, to ensure we know the representation type
+
     this.setPresentations(viewport.id, presentations);
 
     if (!presentations.positionPresentation) {
@@ -1471,6 +1474,9 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     }
 
     const { segmentationService } = this.servicesManager.services;
+    const viewportInfo = this.getViewportInfo(viewport.id);
+    const viewportOptions = viewportInfo?.getViewportOptions();
+    const shouldHideVolume = viewportOptions?.customViewportProps?.hideVolume;
 
     segmentationPresentation.forEach((presentationItem: SegmentationPresentationItem) => {
       const { segmentationId, type, hydrated } = presentationItem;
@@ -1484,16 +1490,80 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       const representationType = type === Surface && !isVolume3D ? Labelmap : type;
 
       if (hydrated) {
-        segmentationService.addSegmentationRepresentation(viewport.id, {
-          segmentationId,
-          type: representationType,
-          config: {
-            blendMode:
-              viewport?.getBlendMode?.() === 1
-                ? BlendModes.LABELMAP_EDGE_PROJECTION_BLEND
-                : undefined,
-          },
-        });
+        segmentationService
+          .addSegmentationRepresentation(viewport.id, {
+            segmentationId,
+            type: representationType,
+            config: {
+              blendMode:
+                viewport?.getBlendMode?.() === 1
+                  ? BlendModes.LABELMAP_EDGE_PROJECTION_BLEND
+                  : undefined,
+            },
+          })
+          .then(() => {
+            // After segmentation representation is added, update volume opacity if needed
+            if (shouldHideVolume && isVolume3D && viewport instanceof VolumeViewport3D) {
+              const updateVolumeOpacity = () => {
+                const representations = segmentationService.getSegmentationRepresentations(viewport.id);
+                const hasSurfaceRepresentation = representations.some(
+                  rep => rep.type === Surface && rep.segmentationId === segmentationId
+                );
+
+                const volumeIds = viewport.getAllVolumeIds();
+                if (volumeIds.length > 0) {
+                  volumeIds.forEach(volId => {
+                    if (hasSurfaceRepresentation) {
+                      // Hide volume completely for Surface representation (segments only)
+                      viewport.setProperties(
+                        {
+                          colormap: {
+                            opacity: 0,
+                          },
+                        },
+                        volId
+                      );
+                    } else {
+                      // For Labelmap, make volume very transparent but not completely invisible
+                      // This allows the labelmap overlay to be visible
+                      viewport.setProperties(
+                        {
+                          colormap: {
+                            opacity: 0.1,
+                          },
+                        },
+                        volId
+                      );
+                    }
+                  });
+                  viewport.render();
+                  return true;
+                }
+                return false;
+              };
+
+              // Try multiple times with increasing delays to ensure it works
+              // This handles cases where representation or volumes aren't ready immediately
+              const attempts = [100, 500, 1000, 2000, 3000];
+              attempts.forEach(delay => {
+                setTimeout(() => {
+                  updateVolumeOpacity();
+                }, delay);
+              });
+
+              // Also listen for volume loaded events
+              const handleVolumeLoaded = () => {
+                updateVolumeOpacity();
+              };
+              viewport.element.addEventListener(
+                csEnums.Events.VOLUME_VIEWPORT_NEW_VOLUME,
+                handleVolumeLoaded
+              );
+            }
+          })
+          .catch(err => {
+            console.warn('Error adding segmentation representation:', err);
+          });
       }
     });
   }

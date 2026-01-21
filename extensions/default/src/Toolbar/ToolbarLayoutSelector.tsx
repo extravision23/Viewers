@@ -106,6 +106,13 @@ function ToolbarLayoutSelectorWithServices({
             protocolId: 'frame-view',
           },
         },
+        {
+          title: '3D Segment',
+          icon: 'layout-single',
+          commandOptions: {
+            protocolId: 'segment3D',
+          },
+        },
       ];
 
   // Unified selection handler that dispatches to the appropriate command

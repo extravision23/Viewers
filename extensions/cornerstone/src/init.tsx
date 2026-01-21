@@ -35,6 +35,8 @@ import initDoubleClick from './initDoubleClick';
 import initViewTiming from './utils/initViewTiming';
 import { colormaps } from './utils/colormaps';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
+import { Enums as csToolsEnums } from '@cornerstonejs/tools';
+import { Enums as csEnums } from '@cornerstonejs/core';
 import { useLutPresentationStore } from './stores/useLutPresentationStore';
 import { usePositionPresentationStore } from './stores/usePositionPresentationStore';
 import { useSegmentationPresentationStore } from './stores/useSegmentationPresentationStore';
@@ -247,10 +249,114 @@ export default async function init({
     commandsManager,
   });
 
+  // Set up listener for segmentation representation events to hide volumes in segment-only viewports
+  segmentationService.subscribe(
+    segmentationService.EVENTS.SEGMENTATION_REPRESENTATION_MODIFIED,
+    (event: any) => {
+      const { segmentationId } = event;
+      if (!segmentationId) return;
+
+      // Get all viewports and check if any have hideVolume flag
+      const { viewports } = viewportGridService.getState();
+      
+      viewports.forEach((viewport, viewportId) => {
+        const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
+        if (!viewportInfo) return;
+        
+        const viewportOptions = viewportInfo.getViewportOptions();
+        const shouldHideVolume = viewportOptions?.customViewportProps?.hideVolume;
+        
+        if (shouldHideVolume) {
+          const csViewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+          if (csViewport && csViewport.type === csEnums.ViewportType.VOLUME_3D) {
+            // Check if this segmentation uses Surface representation
+            const representations = segmentationService.getSegmentationRepresentations(viewportId, {
+              segmentationId,
+            });
+            
+            const hasSurfaceRepresentation = representations.some(
+              rep => rep.type === csToolsEnums.SegmentationRepresentations.Surface
+            );
+            
+            if (hasSurfaceRepresentation) {
+              // Hide volume completely for Surface representation
+              const volumeIds = csViewport.getAllVolumeIds();
+              volumeIds.forEach(volId => {
+                csViewport.setProperties(
+                  {
+                    colormap: {
+                      opacity: 0,
+                    },
+                  },
+                  volId
+                );
+              });
+              csViewport.render();
+            }
+          }
+        }
+      });
+    }
+  );
+
   initDoubleClick({
     customizationService,
     commandsManager,
   });
+
+  // Set up listener for segmentation representation events to hide volumes in segment-only viewports
+  segmentationService.subscribe(
+    segmentationService.EVENTS.SEGMENTATION_REPRESENTATION_MODIFIED,
+    (event: any) => {
+      const { segmentationId } = event;
+      if (!segmentationId) return;
+
+      // Get all viewports and check if any have hideVolume flag
+      const { viewports } = viewportGridService.getState();
+      
+      viewports.forEach((viewport, viewportId) => {
+        const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
+        if (!viewportInfo) return;
+        
+        const viewportOptions = viewportInfo.getViewportOptions();
+        const shouldHideVolume = viewportOptions?.customViewportProps?.hideVolume;
+        
+        if (shouldHideVolume) {
+          const csViewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+          if (csViewport && csViewport.type === csEnums.ViewportType.VOLUME_3D) {
+            // Check if this segmentation uses Surface representation
+            const representations = segmentationService.getSegmentationRepresentations(viewportId, {
+              segmentationId,
+            });
+            
+            const hasSurfaceRepresentation = representations.some(
+              rep => rep.type === csToolsEnums.SegmentationRepresentations.Surface
+            );
+            
+            if (hasSurfaceRepresentation) {
+              // Hide volume completely for Surface representation
+              setTimeout(() => {
+                const volumeIds = csViewport.getAllVolumeIds();
+                if (volumeIds.length > 0) {
+                  volumeIds.forEach(volId => {
+                    csViewport.setProperties(
+                      {
+                        colormap: {
+                          opacity: 0,
+                        },
+                      },
+                      volId
+                    );
+                  });
+                  csViewport.render();
+                }
+              }, 100); // Small delay to ensure representation is fully added
+            }
+          }
+        }
+      });
+    }
+  );
 
   /**
    * Runs error handler for failed requests.

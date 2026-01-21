@@ -207,6 +207,7 @@ function modeFactory({ modeConfiguration }) {
               rightPanels: [
                 cornerstone.labelMapSegmentationPanel,
                 cornerstone.contourSegmentationPanel,
+                cornerstone.segmentation, // Generic panel for all representation types (including Surface)
               ],
               rightPanelResizable: true,
               // leftPanelClosed: true,

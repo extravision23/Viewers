@@ -1058,7 +1058,27 @@ class SegmentationService extends PubSubService {
     isVisible: boolean,
     type?: csToolsEnums.SegmentationRepresentations
   ): void {
-    this._setSegmentVisibility(viewportId, segmentationId, segmentIndex, isVisible, type);
+    // If a specific representation type is provided, update only that type.
+    // Otherwise, apply the visibility to all representations for this segmentation
+    // in the given viewport to avoid writing visibility state under "undefined".
+    if (type) {
+      this._setSegmentVisibility(viewportId, segmentationId, segmentIndex, isVisible, type);
+      return;
+    }
+
+    const representations = this.getSegmentationRepresentations(viewportId, {
+      segmentationId,
+    });
+
+    representations.forEach(representation => {
+      this._setSegmentVisibility(
+        viewportId,
+        segmentationId,
+        segmentIndex,
+        isVisible,
+        representation.type
+      );
+    });
   }
 
   /**
@@ -1103,7 +1123,35 @@ class SegmentationService extends PubSubService {
       },
       segmentIndex
     );
-    this._setSegmentVisibility(viewportId, segmentationId, segmentIndex, !isVisible, type);
+    const nextVisible = !isVisible;
+
+    // Toggle visibility for the requested representation type
+    this._setSegmentVisibility(viewportId, segmentationId, segmentIndex, nextVisible, type);
+
+    // For 3D volume viewports, keep Labelmap (UI) and Surface (rendered mesh)
+    // visibility in sync for per-segment toggles.
+    const { cornerstoneViewportService } = this.servicesManager.services;
+    const csViewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+
+    if (csViewport?.type === ViewportType.VOLUME_3D) {
+      let mirroredType: csToolsEnums.SegmentationRepresentations | null = null;
+
+      if (type === LABELMAP) {
+        mirroredType = SURFACE;
+      } else if (type === SURFACE) {
+        mirroredType = LABELMAP;
+      }
+
+      if (mirroredType) {
+        this._setSegmentVisibility(
+          viewportId,
+          segmentationId,
+          segmentIndex,
+          nextVisible,
+          mirroredType
+        );
+      }
+    }
   }
 
   /**
@@ -1623,8 +1671,25 @@ class SegmentationService extends PubSubService {
 
   private async handleVolumeViewportCase(csViewport, segmentation, isVolumeSegmentation) {
     if (csViewport.type === ViewportType.VOLUME_3D) {
+      // Check if labelmap volume exists and is ready before attempting surface conversion
+      const labelmapData = segmentation.representationData[LABELMAP];
+      if (labelmapData?.imageIds?.length) {
+        // Verify that at least one image is loaded
+        const firstImage = cache.getImage(labelmapData.imageIds[0]);
+        if (firstImage && firstImage.getPixelData) {
+          // Volume appears ready, attempt surface conversion
+          return {
+            representationTypeToUse: SURFACE,
+            isConverted: false,
+          };
+        }
+      }
+      // If volume not ready, fall back to labelmap
+      console.warn(
+        'Labelmap volume not ready for surface conversion, using labelmap representation'
+      );
       return {
-        representationTypeToUse: SURFACE,
+        representationTypeToUse: LABELMAP,
         isConverted: false,
       };
     } else {
@@ -1676,14 +1741,142 @@ class SegmentationService extends PubSubService {
       blendMode?: csEnums.BlendModes;
     }
   ): Promise<void> {
+    // Check if representation already exists to prevent duplicates
+    const existingRepresentations = this.getSegmentationRepresentations(viewportId, {
+      segmentationId,
+    });
+
+    const existingRepOfType = existingRepresentations.find(rep => rep.type === representationType);
+    if (existingRepOfType) {
+      // Representation already exists, skip adding to prevent duplicates
+      console.debug(
+        `Segmentation representation of type ${representationType} already exists for segmentation ${segmentationId} in viewport ${viewportId}, skipping duplicate addition`
+      );
+      return;
+    }
+    // For Surface representation, ensure labelmap volume is ready
+    if (representationType === SURFACE) {
+      let labelmapVolume = this.getLabelmapVolume(segmentationId);
+
+      if (!labelmapVolume) {
+        // Volume might not be in cache yet, wait a bit and retry
+        let retries = 10;
+        while (!labelmapVolume && retries > 0) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          labelmapVolume = this.getLabelmapVolume(segmentationId);
+          retries--;
+        }
+      }
+
+      if (!labelmapVolume) {
+        console.warn(
+          `Labelmap volume not found for segmentation ${segmentationId}, using Labelmap representation instead of Surface`
+        );
+        representationType = LABELMAP;
+      } else {
+        // Wait for volume to load (with longer timeout and check for actual data)
+        const maxWaitTime = 20000; // 20 seconds - volumes can take time to load, especially large ones
+        const startTime = Date.now();
+        const checkInterval = 300; // Check every 300ms
+
+        while (Date.now() - startTime < maxWaitTime) {
+          // Re-fetch volume in case it was just added to cache
+          const currentVolume = this.getLabelmapVolume(segmentationId);
+          if (!currentVolume) {
+            await new Promise(resolve => setTimeout(resolve, checkInterval));
+            continue;
+          }
+          const getScalarData = () => {
+            try {
+              return currentVolume.voxelManager.getScalarData();
+            } catch (e) {
+              return null;
+            }
+          };
+          // Check if volume is ready by verifying it has data
+          // Volume doesn't have loadStatus, so we check for actual data presence
+          try {
+            // Check if volume has dimensions (indicates it's initialized)
+            if (currentVolume.dimensions && currentVolume.dimensions.length === 3) {
+              // Check if voxelManager exists and has data
+              if (currentVolume.voxelManager) {
+                try {
+                  const scalarData = getScalarData();
+                  if (scalarData && scalarData.length > 0) {
+                    // Volume is ready with data
+                    break;
+                  }
+                } catch (e) {
+                  // voxelManager might not be fully initialized yet
+                }
+              }
+
+              // Alternative check: if volume has imageIds, it's likely ready
+              if (currentVolume.imageIds && currentVolume.imageIds.length > 0) {
+                // Check if at least one image is cached
+                const firstImageId = currentVolume.imageIds[0];
+                const cachedImage = cache.getImage(firstImageId);
+                if (cachedImage && cachedImage.getPixelData) {
+                  // Volume appears ready
+                  break;
+                }
+              }
+            }
+          } catch (e) {
+            // Volume might not be fully initialized yet, continue waiting
+          }
+
+          await new Promise(resolve => setTimeout(resolve, checkInterval));
+        }
+
+        // Final check - verify volume has data
+        const finalVolume = this.getLabelmapVolume(segmentationId);
+        if (representationType === SURFACE) {
+          let isReady = false;
+          if (finalVolume) {
+            const getScalarData = () => {
+              try {
+                return finalVolume.voxelManager.getScalarData();
+              } catch (e) {
+                return null;
+              }
+            };
+            try {
+              // Check if volume has valid data
+              if (finalVolume.voxelManager) {
+                const scalarData = getScalarData();
+                if (scalarData && scalarData.length > 0) {
+                  isReady = true;
+                }
+              }
+              if (finalVolume.dimensions && finalVolume.dimensions.length === 3) {
+                // Volume has dimensions, likely ready
+                isReady = true;
+              }
+            } catch (e) {
+              // Volume not ready
+            }
+          }
+
+          if (!isReady) {
+            console.warn(
+              `Labelmap volume not ready after ${maxWaitTime}ms for segmentation ${segmentationId}, using Labelmap representation instead of Surface`
+            );
+            representationType = LABELMAP;
+          }
+        }
+      }
+    }
+
     const representation = {
       type: representationType,
       segmentationId,
       config: { colorLUTOrIndex: colorLUTIndex, ...config },
     };
 
-    const addRepresentation = () =>
+    const addRepresentation = () => {
       cstSegmentation.addSegmentationRepresentations(viewportId, [representation]);
+    };
 
     if (isConverted) {
       const { viewportGridService } = this.servicesManager.services;
@@ -2081,7 +2274,7 @@ class SegmentationService extends PubSubService {
     segmentationId: string,
     segmentIndex: number,
     isVisible: boolean,
-    type?: csToolsEnums.SegmentationRepresentations
+    type: csToolsEnums.SegmentationRepresentations
   ) {
     cstSegmentation.config.visibility.setSegmentIndexVisibility(
       viewportId,
