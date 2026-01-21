@@ -6,6 +6,8 @@ import {
   SegmentationRepresentation,
 } from '../services/SegmentationService/SegmentationService';
 import { useSystem } from '@ohif/core';
+import { ViewportType } from '@cornerstonejs/core/enums';
+import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
 const excludedModalities = ['SM', 'OT', 'DOC', 'ECG'];
 
 function mapSegmentationToDisplay(segmentation, customizationService) {
@@ -155,8 +157,23 @@ export function useViewportSegmentations({
       // Deduplicate representations by segmentationId to prevent showing
       // the same segmentation multiple times in the panel when it has
       // multiple representation types (e.g., labelmap and surface)
+      // Always prefer Labelmap for the UI panel, as it contains the segment
+      // information needed for display. Surface representation is still used
+      // for 3D rendering, but the panel needs Labelmap to show segments.
       const uniqueSegmentationMap = new Map();
-      representations.forEach(representation => {
+
+      // Sort representations to always prefer Labelmap for UI display
+      const sortedRepresentations = [...representations].sort((a, b) => {
+        const aIsSurface = a.type === SegmentationRepresentations.Surface;
+        const bIsSurface = b.type === SegmentationRepresentations.Surface;
+
+        // Always prefer Labelmap over Surface for UI panel
+        if (!aIsSurface && bIsSurface) return -1;
+        if (aIsSurface && !bIsSurface) return 1;
+        return 0;
+      });
+
+      sortedRepresentations.forEach(representation => {
         if (!uniqueSegmentationMap.has(representation.segmentationId)) {
           uniqueSegmentationMap.set(representation.segmentationId, representation);
         }
@@ -165,13 +182,18 @@ export function useViewportSegmentations({
       const newSegmentationsWithRepresentations = Array.from(uniqueSegmentationMap.values()).map(
         representation => {
           const segmentation = segmentationService.getSegmentation(representation.segmentationId);
+          if (!segmentation) {
+            console.warn(`Segmentation ${representation.segmentationId} not found`);
+            return null;
+          }
           const mappedSegmentation = mapSegmentationToDisplay(segmentation, customizationService);
+
           return {
             representation,
             segmentation: mappedSegmentation,
           };
         }
-      );
+      ).filter(Boolean); // Remove null entries
 
       setSegmentationsWithRepresentations({
         segmentationsWithRepresentations: newSegmentationsWithRepresentations,

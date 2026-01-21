@@ -10,19 +10,14 @@
       "name": "Launch Chrome against localhost",
       "url": "http://localhost:3000",
       "webRoot": "${workspaceFolder}"
+    },
+    {
+      "name": "Attach to Node Functions",
+      "type": "node",
+      "request": "attach",
+      "restart": true,
+      "port": 9229,
+      "preLaunchTask": "func: host start"
     }
-    // {
-    //   "name": "Debug Jest Tests",
-    //   "type": "node",
-    //   "request": "launch",
-    //   "runtimeArgs": [
-    //     "--inspect-brk",
-    //     "${workspaceRoot}/node_modules/.bin/jest",
-    //     "--runInBand"
-    //   ],
-    //   "console": "integratedTerminal",
-    //   "internalConsoleOptions": "neverOpen",
-    //   "port": 9229
-    // }
   ]
 }

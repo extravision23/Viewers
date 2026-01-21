@@ -43,6 +43,16 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
     representation = segmentationInfo?.representation;
   }
 
+  if (!representation || !segmentation) {
+    return null;
+  }
+
+  // Ensure representation has segments property
+  if (!representation.segments) {
+    console.warn('Representation does not have segments property:', representation);
+    return null;
+  }
+
   const segments = Object.values(representation.segments);
 
   // Find the active segment to scroll to it when it changes
@@ -55,6 +65,15 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
   });
 
   const isActiveSegmentation = segmentation.segmentationId === activeSegmentationId;
+
+  // If no segments, show a message
+  if (segments.length === 0) {
+    return (
+      <div className="p-4 text-center text-muted-foreground">
+        No segments available for this segmentation
+      </div>
+    );
+  }
 
   const { ref: scrollableContainerRef, maxHeight } = useDynamicMaxHeight(segments);
 
@@ -83,10 +102,6 @@ export const SegmentationSegments = ({ children = null }: { children?: React.Rea
 
     activeSegmentElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [activeSegment?.segmentIndex, scrollableContainerRef]);
-
-  if (!representation || !segmentation) {
-    return null;
-  }
 
   return (
     <div ref={scrollableContainerRef}>
