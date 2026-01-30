@@ -1471,7 +1471,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
               const hasSurfaceRepresentation = representations.some(
                 rep => rep.type === Surface && rep.segmentationId === segmentationId
               );
-              
+
               const volumeIds = viewport.getAllVolumeIds();
               if (volumeIds.length > 0) {
                 volumeIds.forEach(volId => {
