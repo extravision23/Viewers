@@ -219,6 +219,10 @@ import MRDefault from '../../../assets/images/MR-Default.png';
 import MRMIP from '../../../assets/images/MR-MIP.png';
 import MRT2Brain from '../../../assets/images/MR-T2-Brain.png';
 import VolumeRendering from '../../../assets/images/VolumeRendering.png';
+// Custom branding
+import ExtraVisionLogo from '../../../assets/images/extravision-logo.png';
+import ExtraVisionLogoLight from '../../../assets/images/extravision-logo-light.svg';
+import ExtraVisionLogoDark from '../../../assets/images/extravision-logo-dark.svg';
 import ExternalLink from './Sources/ExternalLink';
 import OHIFLogoColorDarkBackground from './Sources/OHIFLogoColorDarkBackground';
 import Magnifier from './Sources/Magnifier';
@@ -407,6 +411,24 @@ export const Icons = {
   VolumeRendering: (props: ImageIconProps) => (
     <ImageWrapper
       src={VolumeRendering}
+      {...props}
+    />
+  ),
+  ExtraVisionLogo: (props: ImageIconProps) => (
+    <ImageWrapper
+      src={ExtraVisionLogo}
+      {...props}
+    />
+  ),
+  ExtraVisionLogoLight: (props: ImageIconProps) => (
+    <ImageWrapper
+      src={ExtraVisionLogoLight}
+      {...props}
+    />
+  ),
+  ExtraVisionLogoDark: (props: ImageIconProps) => (
+    <ImageWrapper
+      src={ExtraVisionLogoDark}
       {...props}
     />
   ),

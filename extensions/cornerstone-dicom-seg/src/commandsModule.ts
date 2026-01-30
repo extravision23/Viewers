@@ -1292,17 +1292,6 @@ const commandsModule = ({
         return;
       }
 
-      // Only allow deletion of SEG modality
-      if (displaySet.Modality !== 'SEG') {
-        uiNotificationService.show({
-          title: 'Delete Failed',
-          message: 'Only segmentation series can be deleted',
-          type: 'error',
-          duration: 5000,
-        });
-        return;
-      }
-
       const segmentationName =
         displaySet.SeriesDescription || displaySet.label || displaySetInstanceUID;
       const StudyInstanceUID = displaySet.StudyInstanceUID;

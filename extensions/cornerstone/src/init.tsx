@@ -258,14 +258,14 @@ export default async function init({
 
       // Get all viewports and check if any have hideVolume flag
       const { viewports } = viewportGridService.getState();
-      
+
       viewports.forEach((viewport, viewportId) => {
         const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
         if (!viewportInfo) return;
-        
+
         const viewportOptions = viewportInfo.getViewportOptions();
         const shouldHideVolume = viewportOptions?.customViewportProps?.hideVolume;
-        
+
         if (shouldHideVolume) {
           const csViewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
           if (csViewport && csViewport.type === csEnums.ViewportType.VOLUME_3D) {
@@ -273,11 +273,11 @@ export default async function init({
             const representations = segmentationService.getSegmentationRepresentations(viewportId, {
               segmentationId,
             });
-            
+
             const hasSurfaceRepresentation = representations.some(
               rep => rep.type === csToolsEnums.SegmentationRepresentations.Surface
             );
-            
+
             if (hasSurfaceRepresentation) {
               // Hide volume completely for Surface representation
               const volumeIds = csViewport.getAllVolumeIds();
@@ -313,14 +313,14 @@ export default async function init({
 
       // Get all viewports and check if any have hideVolume flag
       const { viewports } = viewportGridService.getState();
-      
+
       viewports.forEach((viewport, viewportId) => {
         const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
         if (!viewportInfo) return;
-        
+
         const viewportOptions = viewportInfo.getViewportOptions();
         const shouldHideVolume = viewportOptions?.customViewportProps?.hideVolume;
-        
+
         if (shouldHideVolume) {
           const csViewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
           if (csViewport && csViewport.type === csEnums.ViewportType.VOLUME_3D) {
@@ -328,11 +328,11 @@ export default async function init({
             const representations = segmentationService.getSegmentationRepresentations(viewportId, {
               segmentationId,
             });
-            
+
             const hasSurfaceRepresentation = representations.some(
               rep => rep.type === csToolsEnums.SegmentationRepresentations.Surface
             );
-            
+
             if (hasSurfaceRepresentation) {
               // Hide volume completely for Surface representation
               setTimeout(() => {
