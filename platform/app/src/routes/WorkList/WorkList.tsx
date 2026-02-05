@@ -40,6 +40,8 @@ import {
 import { Types } from '@ohif/ui';
 
 import { preserveQueryParameters, preserveQueryStrings } from '../../utils/preserveQueryParameters';
+import { buildFunctionUrl } from '../../utils/buildFunctionUrl';
+import FusionSeriesSelectionModal from './FusionSeriesSelectionModal';
 
 const PatientInfoVisibility = Types.PatientInfoVisibility;
 
@@ -138,6 +140,10 @@ function WorkList({
   const [expandedRows, setExpandedRows] = useState([]);
   const [studiesWithSeriesData, setStudiesWithSeriesData] = useState([]);
   const numOfStudies = studiesTotal;
+
+  // ~ Fusion Study Selection
+  const [selectedCTStudy, setSelectedCTStudy] = useState<string | null>(null);
+  const [selectedMRStudy, setSelectedMRStudy] = useState<string | null>(null);
   const querying = useMemo(() => {
     return isLoadingData || expandedRows.length > 0;
   }, [isLoadingData, expandedRows]);
@@ -205,6 +211,154 @@ function WorkList({
     } catch (err) {
       console.error(err);
       toast.error('Failed to download study.');
+    }
+  };
+
+  // Fetch series for selected studies if not already fetched
+  useEffect(() => {
+    const fetchSeriesForSelectedStudies = async () => {
+      const studiesToFetch = [selectedCTStudy, selectedMRStudy].filter(Boolean);
+
+      for (const studyInstanceUid of studiesToFetch) {
+        if (!seriesInStudiesMap.has(studyInstanceUid) && !studiesWithSeriesData.includes(studyInstanceUid)) {
+          try {
+            const series = await dataSource.query.series.search(studyInstanceUid);
+            seriesInStudiesMap.set(studyInstanceUid, sortBySeriesDate(series));
+            setStudiesWithSeriesData(prev => [...prev, studyInstanceUid]);
+          } catch (ex) {
+            console.warn('Failed to fetch series for study:', studyInstanceUid, ex);
+          }
+        }
+      }
+    };
+
+    if (selectedCTStudy || selectedMRStudy) {
+      fetchSeriesForSelectedStudies();
+    }
+  }, [selectedCTStudy, selectedMRStudy, dataSource, studiesWithSeriesData]);
+
+  // Handle Fusion button click
+  const handleFusionClick = async () => {
+    if (!selectedCTStudy || !selectedMRStudy) {
+      return;
+    }
+
+    // Get series for both studies
+    const ctSeries = seriesInStudiesMap.get(selectedCTStudy) || [];
+    const mrSeries = seriesInStudiesMap.get(selectedMRStudy) || [];
+
+    // Filter CT and MR series (excluding MR with Fusion in description)
+    const filteredCTSeries = ctSeries.filter(s => {
+      const modality = (s.modality || s.Modality || '').trim();
+      return modality === 'CT';
+    });
+
+    const filteredMRSeries = mrSeries.filter(s => {
+      const modality = (s.modality || s.Modality || '').trim();
+      const description = (s.description || '').trim();
+      return modality === 'MR' && !description.toLowerCase().includes('fusion');
+    });
+
+    // Check if we need to show the modal (more than one CT or MR series)
+    if (filteredCTSeries.length > 1 || filteredMRSeries.length > 1) {
+      // Show modal for series selection
+      show({
+        content: FusionSeriesSelectionModal,
+        title: 'Select Series for Fusion',
+        containerClassName: 'max-w-6xl',
+        contentProps: {
+          ctStudyInstanceUID: selectedCTStudy,
+          mrStudyInstanceUID: selectedMRStudy,
+          ctSeries: filteredCTSeries.map(s => ({
+            seriesInstanceUid: s.seriesInstanceUid,
+            description: s.description || '',
+            modality: s.modality || s.Modality || '',
+            seriesNumber: s.seriesNumber,
+          })),
+          mrSeries: filteredMRSeries.map(s => ({
+            seriesInstanceUid: s.seriesInstanceUid,
+            description: s.description || '',
+            modality: s.modality || s.Modality || '',
+            seriesNumber: s.seriesNumber,
+          })),
+          onFusion: handleFusionRequest,
+          onClose: hide,
+        },
+      });
+    } else if (filteredCTSeries.length === 1 && filteredMRSeries.length === 1) {
+      // Direct fusion with single series each
+      handleFusionRequest(
+        filteredCTSeries[0].seriesInstanceUid,
+        filteredMRSeries[0].seriesInstanceUid
+      );
+    } else {
+      toast.error('No valid CT or MR series found for fusion.');
+    }
+  };
+
+  // Handle fusion API request
+  const handleFusionRequest = async (ctSeriesInstanceUID: string, mrSeriesInstanceUID: string) => {
+    if (!selectedCTStudy || !selectedMRStudy) {
+      return;
+    }
+
+    // Get series descriptions for notification
+    const ctSeries = seriesInStudiesMap.get(selectedCTStudy) || [];
+    const mrSeries = seriesInStudiesMap.get(selectedMRStudy) || [];
+
+    const ctSeriesData = ctSeries.find(s => s.seriesInstanceUid === ctSeriesInstanceUID);
+    const mrSeriesData = mrSeries.find(s => s.seriesInstanceUid === mrSeriesInstanceUID);
+
+    const ctDescription = ctSeriesData?.description || 'CT series';
+    const mrDescription = mrSeriesData?.description || 'MR series';
+
+    // Close modal if open
+    hide();
+
+    // Show starting notification
+    toast.info(`Fusion of CT ${ctDescription} and MR ${mrDescription} is started.`);
+
+    try {
+      const endpoint = buildFunctionUrl(config, 'fusion/ct-mr');
+      const payload = {
+        ctStudyInstanceUID: selectedCTStudy,
+        ctSeriesInstanceUID: ctSeriesInstanceUID,
+        mrStudyInstanceUID: selectedMRStudy,
+        mrSeriesInstanceUID: mrSeriesInstanceUID,
+        mode: 'rigid',
+      };
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(dataSource),
+        },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let errorText = '';
+        try {
+          errorText = await response.text();
+        } catch (e) {
+          errorText = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        throw new Error(errorText || `HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      // Try to parse JSON, but handle non-JSON responses
+      try {
+        const result = await response.json();
+        toast.success(`Fusion completed successfully.`);
+      } catch (e) {
+        // If response is not JSON, still consider it successful if status is OK
+        toast.success(`Fusion completed successfully.`);
+      }
+    } catch (error) {
+      console.error('Fusion request failed:', error);
+      toast.error(`Fusion failed: ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -288,6 +442,136 @@ function WorkList({
     return !isEqual(filterValues, defaultFilterValues);
   };
 
+  // Helper functions for modality checking
+  const hasModality = (modalities: string, modality: string): boolean => {
+    if (!modalities) return false;
+    // Modalities can be separated by '/' or '\'
+    const modalityList = modalities.split(/[/\\]/).map(m => m.trim());
+    return modalityList.includes(modality);
+  };
+
+  // Check if study has CT or MR by checking both study-level modalities and series data
+  const studyHasCTOrMR = (studyInstanceUid: string, modalities: string): { hasCT: boolean; hasMR: boolean } => {
+    let hasCT = false;
+    let hasMR = false;
+
+    // First check study-level modalities
+    if (modalities) {
+      hasCT = hasModality(modalities, 'CT');
+      hasMR = hasModality(modalities, 'MR');
+    }
+
+    // Check series data if available (series data is more reliable than study-level modalities)
+    // Always check series data if it's available, as it's more accurate
+    if (seriesInStudiesMap.has(studyInstanceUid)) {
+      const series = seriesInStudiesMap.get(studyInstanceUid);
+      if (series && Array.isArray(series)) {
+        // Reset hasCT and hasMR to check from series data
+        hasCT = false;
+        hasMR = false;
+        for (const s of series) {
+          const seriesModality = (s.modality || s.Modality || '').trim();
+          const seriesDescription = (s.description || '').trim();
+
+          if (seriesModality === 'CT') {
+            hasCT = true;
+          } else if (seriesModality === 'MR') {
+            // Ignore MR modalities that have "Fusion" in description
+            if (!seriesDescription.toLowerCase().includes('fusion')) {
+              hasMR = true;
+            }
+          }
+          // If we found both, we can break early
+          if (hasCT && hasMR) break;
+        }
+      }
+    } else {
+      // If no series data available, we still need to check study-level modalities
+      // but we can't check descriptions, so we'll use the study-level check
+      // However, if we have series data later, it will override this
+    }
+
+    return { hasCT, hasMR };
+  };
+
+  const hasCT = (modalities: string): boolean => hasModality(modalities, 'CT');
+  const hasMR = (modalities: string): boolean => hasModality(modalities, 'MR');
+
+  const hasCTOrMR = (modalities: string): boolean => {
+    return hasCT(modalities) || hasMR(modalities);
+  };
+
+  // Handle study checkbox selection
+  const handleStudySelection = (studyInstanceUid: string, modalities: string) => {
+    const { hasCT: isCT, hasMR: isMR } = studyHasCTOrMR(studyInstanceUid, modalities);
+
+    if (isCT) {
+      if (selectedCTStudy === studyInstanceUid) {
+        // Unselect CT
+        setSelectedCTStudy(null);
+      } else {
+        // Select CT
+        setSelectedCTStudy(studyInstanceUid);
+      }
+    } else if (isMR) {
+      if (selectedMRStudy === studyInstanceUid) {
+        // Unselect MR
+        setSelectedMRStudy(null);
+      } else {
+        // Select MR
+        setSelectedMRStudy(studyInstanceUid);
+      }
+    }
+  };
+
+  // Determine if checkbox should be shown for a study (always show if has CT or MR)
+  const shouldShowCheckbox = (studyInstanceUid: string, modalities: string): boolean => {
+    const { hasCT, hasMR } = studyHasCTOrMR(studyInstanceUid, modalities);
+    return hasCT || hasMR;
+  };
+
+  // Determine if checkbox should be enabled (selectable)
+  const isCheckboxEnabled = (studyInstanceUid: string, modalities: string): boolean => {
+    // Always enable if the checkbox is already checked (selected)
+    const isChecked = isCheckboxChecked(studyInstanceUid, modalities);
+    if (isChecked) {
+      return true;
+    }
+
+    const { hasCT: isCT, hasMR: isMR } = studyHasCTOrMR(studyInstanceUid, modalities);
+
+    // If both studies are selected, enable checkboxes only on the selected studies
+    if (selectedCTStudy && selectedMRStudy) {
+      return studyInstanceUid === selectedCTStudy || studyInstanceUid === selectedMRStudy;
+    }
+
+    // If CT is selected, enable checkboxes only on MR studies
+    if (selectedCTStudy) {
+      return isMR;
+    }
+
+    // If MR is selected, enable checkboxes only on CT studies
+    if (selectedMRStudy) {
+      return isCT;
+    }
+
+    // If nothing is selected, enable checkboxes on all CT/MR studies
+    return true;
+  };
+
+  // Determine if checkbox should be checked
+  const isCheckboxChecked = (studyInstanceUid: string, modalities: string): boolean => {
+    const { hasCT: isCT, hasMR: isMR } = studyHasCTOrMR(studyInstanceUid, modalities);
+
+    if (isCT && selectedCTStudy === studyInstanceUid) {
+      return true;
+    }
+    if (isMR && selectedMRStudy === studyInstanceUid) {
+      return true;
+    }
+    return false;
+  };
+
   const rollingPageNumberMod = Math.floor(101 / resultsPerPage);
   const rollingPageNumber = (pageNumber - 1) % rollingPageNumberMod;
   const offset = resultsPerPage * rollingPageNumber;
@@ -336,12 +620,21 @@ function WorkList({
       );
     };
 
+    const showCheckbox = shouldShowCheckbox(studyInstanceUid, modalities);
+    const isChecked = isCheckboxChecked(studyInstanceUid, modalities);
+    const checkboxEnabled = showCheckbox ? isCheckboxEnabled(studyInstanceUid, modalities) : false;
+
     return {
       dataCY: `studyRow-${studyInstanceUid}`,
       clickableCY: studyInstanceUid,
       studyUID: studyInstanceUid,
       onDeleteStudy: handleDeleteStudy,
       onDownloadStudy: handleDownloadStudy,
+      showCheckbox,
+      isChecked,
+      isCheckboxEnabled: checkboxEnabled,
+      onCheckboxChange: () => handleStudySelection(studyInstanceUid, modalities),
+      modalities,
       row: [
         {
           key: 'patientName',
@@ -631,6 +924,19 @@ function WorkList({
           </div>
           {hasStudies ? (
             <div className="flex grow flex-col">
+              {selectedCTStudy && selectedMRStudy && (
+                <div className="container m-auto mb-4 flex justify-center">
+                  <Button
+                    type={ButtonEnums.type.primary}
+                    size={ButtonEnums.size.medium}
+                    onClick={handleFusionClick}
+                    dataCY="fusion-button"
+                    className="px-8 py-2"
+                  >
+                    Fusion
+                  </Button>
+                </div>
+              )}
               <StudyListTable
                 tableDataSource={tableDataSource.slice(offset, offsetAndTake)}
                 numOfStudies={numOfStudies}

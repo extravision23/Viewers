@@ -1,8 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSystem } from '@ohif/core';
 import { useMagicWandSegmentation } from '../hooks/useMagicWandSegmentation';
+import { useModal } from '@ohif/ui-next';
+import TotalSegmentatorTaskModal from '../components/TotalSegmentatorTaskModal';
+import { buildFunctionUrl } from '@ohif/app/src/utils/buildFunctionUrl';
 
 type ServerSideSegmentationPanelProps = withAppTypes;
+
+function getAuthHeader(dataSource) {
+  const bearer = dataSource?.retrieve?.customClient?.headers?.Authorization;
+  return bearer ? { Authorization: bearer } : {};
+}
 
 interface CTPreset {
   value: string;
@@ -54,6 +62,7 @@ const PRESETS: CTPreset[] = [
 export default function ServerSideSegmentationPanel(props: ServerSideSegmentationPanelProps) {
   const { servicesManager, extensionManager, commandsManager } = useSystem();
   const { uiNotificationService, segmentationService, displaySetService } = servicesManager.services;
+  const { show, hide } = useModal();
 
   const { mode, error, seedMarker, options, setOptions, startPickingSeed } =
     useMagicWandSegmentation();
@@ -61,6 +70,7 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isRunningOneClick, setIsRunningOneClick] = useState(false);
   const [isRunningByPreset, setIsRunningByPreset] = useState(false);
+  const [isRunningTotalSegmentator, setIsRunningTotalSegmentator] = useState(false);
   const [selectedPresets, setSelectedPresets] = useState<string[]>(['bone']);
   const [minHu, setMinHu] = useState<string>('300');
   const [maxHu, setMaxHu] = useState<string>('3000');
@@ -313,7 +323,138 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
     startPickingSeed();
   };
 
-  const isDisabled = mode === 'loading' || isRunningOneClick || isRunningByPreset;
+  const handleTotalSegmentatorClick = async () => {
+    if (isRunningTotalSegmentator) {
+      return;
+    }
+
+    const { viewportGridService, displaySetService } = servicesManager.services;
+    const viewportId = viewportGridService.getActiveViewportId();
+    const { viewports } = viewportGridService.getState();
+    const viewport = viewports.get(viewportId);
+
+    if (!viewport?.displaySetInstanceUIDs?.length) {
+      uiNotificationService?.show({
+        title: 'Total Segmentator',
+        message: 'No active viewport/series found. Click a viewport first.',
+        type: 'error',
+      });
+      return;
+    }
+
+    const displaySetInstanceUID = viewport.displaySetInstanceUIDs[0];
+    const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+
+    if (!displaySet) {
+      uiNotificationService?.show({
+        title: 'Total Segmentator',
+        message: 'No display set found for active viewport.',
+        type: 'error',
+      });
+      return;
+    }
+
+    try {
+      setIsRunningTotalSegmentator(true);
+
+      // Get tasks from server
+      const config = activeDataSource?.getConfig?.();
+      if (!config) {
+        throw new Error('No data source configuration found');
+      }
+
+      const tasksUrl = buildFunctionUrl(config, 'GetTotalSegmentatorTasks');
+      const tasksResponse = await fetch(tasksUrl, {
+        method: 'GET',
+        headers: {
+          ...getAuthHeader(activeDataSource),
+        },
+        credentials: 'include',
+      });
+
+      if (!tasksResponse.ok) {
+        throw new Error(`Failed to fetch tasks: ${tasksResponse.status}`);
+      }
+
+      const tasksData = await tasksResponse.json();
+      const tasks = tasksData.tasks || [];
+
+      if (tasks.length === 0) {
+        uiNotificationService?.show({
+          title: 'Total Segmentator',
+          message: 'No tasks available.',
+          type: 'error',
+        });
+        return;
+      }
+
+      // Show modal for task selection
+      show({
+        content: TotalSegmentatorTaskModal,
+        title: 'Select a task',
+        containerClassName: 'max-w-2xl',
+        contentProps: {
+          tasks,
+          onRun: async (taskName: string) => {
+            hide();
+            await runTotalSegmentator(taskName, displaySet, viewportId);
+          },
+          onClose: hide,
+        },
+      });
+    } catch (e) {
+      console.error('Error fetching Total Segmentator tasks:', e);
+      uiNotificationService?.show({
+        title: 'Total Segmentator',
+        message: 'Failed to fetch tasks. Check console for details.',
+        type: 'error',
+      });
+    } finally {
+      setIsRunningTotalSegmentator(false);
+    }
+  };
+
+  const runTotalSegmentator = async (
+    taskName: string,
+    displaySet: any,
+    viewportId: string
+  ) => {
+    const { StudyInstanceUID: studyInstanceUID, SeriesInstanceUID: seriesInstanceUID } =
+      displaySet;
+
+    try {
+      setIsRunningTotalSegmentator(true);
+      uiNotificationService?.show({
+        title: 'Total Segmentator',
+        message: 'Starting segmentation, please wait…',
+        type: 'info',
+      });
+
+      await commandsManager.runCommand('totalSegmentator', {
+        studyInstanceUID,
+        seriesInstanceUID,
+        taskName,
+        viewportId,
+      });
+
+      uiNotificationService?.show({
+        title: 'Total Segmentator',
+        message: 'Segmentation request triggered successfully.',
+        type: 'success',
+      });
+    } catch (e) {
+      console.error('Total Segmentator failed', e);
+      uiNotificationService?.show({
+        title: 'Total Segmentator',
+        message: 'Segmentation request failed.',
+        type: 'error',
+      });
+    } finally {
+      setIsRunningTotalSegmentator(false);
+    }
+  };
+
+  const isDisabled = mode === 'loading' || isRunningOneClick || isRunningByPreset || isRunningTotalSegmentator;
   const isHuRangeDisabled = selectedPresets.length !== 1;
 
   return (
@@ -341,6 +482,17 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
             }`}
           >
             Run Tumor Segmentation
+          </button>
+          <button
+            onClick={handleTotalSegmentatorClick}
+            disabled={isDisabled}
+            className={`w-full rounded-md px-4 py-2 font-medium transition-colors ${
+              isDisabled
+                ? 'cursor-not-allowed bg-gray-600 text-gray-400'
+                : 'bg-gray-700 text-white hover:bg-gray-600'
+            }`}
+          >
+            {isRunningTotalSegmentator ? 'Loading tasks…' : 'Run Total Segmentator'}
           </button>
         </div>
 

@@ -16,6 +16,10 @@ const StudyListTableRow = props => {
     onDeleteStudy,
     onDownloadStudy,
     studyUID,
+    showCheckbox,
+    isChecked,
+    isCheckboxEnabled,
+    onCheckboxChange,
   } = tableData;
   return (
     <>
@@ -53,19 +57,32 @@ const StudyListTableRow = props => {
                   onClick={onClickRow}
                   data-cy={clickableCY}
                 >
-                  <td className="w-8 px-2 py-2">
-                    <button
-                      type="button"
-                      title="Delete study"
-                      onClick={e => {
-                        e.stopPropagation();
-                        onDeleteStudy?.(studyUID);
-                      }}
-                      data-cy={`delete-${studyUID}`}
-                    >
-                      <Icons.Trash className="h-5 w-5 text-red-500 hover:text-red-700" />
-                    </button>
-                  </td>
+                  {showCheckbox && (
+                    <td className="w-8 px-2 py-2">
+                      <input
+                        type="checkbox"
+                        checked={isChecked || false}
+                        disabled={!isCheckboxEnabled}
+                        onChange={e => {
+                          e.stopPropagation();
+                          if (isCheckboxEnabled) {
+                            onCheckboxChange?.();
+                          }
+                        }}
+                        onClick={e => {
+                          e.stopPropagation();
+                          if (!isCheckboxEnabled) {
+                            e.preventDefault();
+                          }
+                        }}
+                        data-cy={`checkbox-${studyUID}`}
+                        className={classnames('h-5 w-5', {
+                          'cursor-pointer': isCheckboxEnabled,
+                          'cursor-not-allowed opacity-50': !isCheckboxEnabled,
+                        })}
+                      />
+                    </td>
+                  )}
                   <td className="w-8 px-2 py-2">
                     <button
                       type="button"
@@ -113,10 +130,23 @@ const StudyListTableRow = props => {
                       </td>
                     );
                   })}
+                  <td className="w-8 px-2 py-2">
+                    <button
+                      type="button"
+                      title="Delete study"
+                      onClick={e => {
+                        e.stopPropagation();
+                        onDeleteStudy?.(studyUID);
+                      }}
+                      data-cy={`delete-${studyUID}`}
+                    >
+                      <Icons.Trash className="h-5 w-5 text-red-500 hover:text-red-700" />
+                    </button>
+                  </td>
                 </tr>
                 {isExpanded && (
                   <tr className="max-h-0 w-full select-text overflow-hidden bg-black">
-                    <td colSpan={row.length + 2}>{expandedContent}</td>
+                    <td colSpan={row.length + (showCheckbox ? 3 : 2) + 1}>{expandedContent}</td>
                   </tr>
                 )}
               </tbody>
@@ -149,6 +179,10 @@ StudyListTableRow.propTypes = {
     onDeleteStudy: PropTypes.func.isRequired,
     onDownloadStudy: PropTypes.func.isRequired,
     studyUID: PropTypes.string.isRequired,
+    showCheckbox: PropTypes.bool,
+    isChecked: PropTypes.bool,
+    isCheckboxEnabled: PropTypes.bool,
+    onCheckboxChange: PropTypes.func,
   }),
 };
 

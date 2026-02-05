@@ -5,6 +5,7 @@ import { segmentation as cornerstoneToolsSegmentation } from '@cornerstonejs/too
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
 import { adaptersRT, adaptersSEG } from '@cornerstonejs/adapters';
 import { createReportDialogPrompt, useUIStateStore } from '@ohif/extension-default';
+import { buildFunctionUrl } from '@ohif/app/src/utils/buildFunctionUrl';
 
 import PROMPT_RESPONSES from '../../default/src/utils/_shared/PROMPT_RESPONSES';
 import {
@@ -19,23 +20,6 @@ const getTargetViewport = ({ viewportId, viewportGridService }) => {
   const viewport = viewports.get(targetViewportId);
 
   return viewport;
-};
-
-const getFunctionsBaseUrl = dataSourceConfig => {
-  return (
-    dataSourceConfig?.pythonFunctionsBaseUrl ||
-    (dataSourceConfig?.pythonFunctionName
-      ? `https://${dataSourceConfig.pythonFunctionName}.azurewebsites.net/api`
-      : undefined)
-  );
-};
-
-const buildFunctionUrl = (dataSourceConfig, functionName: string) => {
-  const baseUrl = getFunctionsBaseUrl(dataSourceConfig);
-  if (!baseUrl) {
-    throw new Error('No python functions base url configured');
-  }
-  return `${baseUrl}/${functionName}`;
 };
 
 const {
@@ -824,6 +808,71 @@ const commandsModule = ({
         throw e;
       }
     },
+    totalSegmentator: async ({
+      studyInstanceUID,
+      seriesInstanceUID,
+      taskName,
+      dataSource,
+      viewportId,
+    }) => {
+      try {
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
+
+        if (!config?.pythonFunctionName) {
+          throw new Error('Missing pythonFunctionName in data source config.');
+        }
+
+        const url = buildFunctionUrl(config, 'TotalSegmentator');
+        let segmentationSeriesInstanceUID;
+        try {
+          const result = await getActiveSegmentationSeriesForServerCall({
+            viewportId,
+            servicesManager,
+            extensionManager,
+            storeSegmentationAction: params => actions.storeSegmentation(params),
+          });
+          segmentationSeriesInstanceUID = result.segmentationSeriesInstanceUID;
+        } catch (error) {
+          if (error instanceof UserCancelledError) {
+            console.log('User cancelled segmentation save, aborting server call');
+            return null;
+          }
+          throw error;
+        }
+
+        // Build payload with studyId, seriesId, and taskName
+        const payload: any = {
+          studyId: studyInstanceUID,
+          seriesId: seriesInstanceUID,
+          taskName,
+        };
+
+        // Add segmentationSeriesInstanceUID if available
+        if (segmentationSeriesInstanceUID) {
+          payload.segmentationSeriesInstanceUID = segmentationSeriesInstanceUID;
+        }
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader(defaultDataSource),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(`Status ${response.status}${text ? `: ${text}` : ''}`);
+        }
+
+        return { success: true };
+      } catch (e) {
+        console.error('Error in totalSegmentator:', e);
+        throw e;
+      }
+    },
 
     /**
      * Helper: Check if a segmentation is saved (has SeriesInstanceUID and is not madeInClient)
@@ -1434,6 +1483,7 @@ const commandsModule = ({
     segmentByPreset: actions.segmentByPreset,
     magicWandSegmentation: actions.magicWandSegmentation,
     oneClickSegmentation: actions.oneClickSegmentation,
+    totalSegmentator: actions.totalSegmentator,
     // Server-side segmentation helpers
     isSegmentationSaved: actions.isSegmentationSaved,
     runServerSegmentation: actions.runServerSegmentation,
