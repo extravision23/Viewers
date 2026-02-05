@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Button,
   Icons,
@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
   Switch,
+  Slider,
 } from '@ohif/ui-next';
 import { useSystem } from '@ohif/core';
 import { useTranslation } from 'react-i18next';
@@ -25,10 +26,6 @@ function ViewportDataOverlayMenu({ viewportId }: withAppTypes<{ viewportId: stri
   const { t } = useTranslation();
   const [pendingForegrounds, setPendingForegrounds] = useState<string[]>([]);
   const [pendingSegmentations, setPendingSegmentations] = useState<string[]>([]);
-  const { toggleColorbar } = useViewportRendering(viewportId);
-
-  const { hangingProtocolService, toolbarService } = servicesManager.services;
-
   const {
     backgroundDisplaySet,
     potentialOverlayDisplaySets,
@@ -36,7 +33,60 @@ function ViewportDataOverlayMenu({ viewportId }: withAppTypes<{ viewportId: stri
     potentialBackgroundDisplaySets,
     overlayDisplaySets,
     foregroundDisplaySets,
+    viewportDisplaySets,
   } = useViewportDisplaySets(viewportId);
+
+  // Decide which display set we treat as the "overlay" for colormap/opacity controls:
+  // 1. true overlayDisplaySets (SEG/RTSTRUCT);
+  // 2. otherwise, any non-background foreground/fusion series.
+  const primaryOverlayDisplaySet =
+    overlayDisplaySets?.[0] ||
+    foregroundDisplaySets?.[0] ||
+    (viewportDisplaySets?.length > 1 ? viewportDisplaySets[1] : undefined);
+
+  const {
+    toggleColorbar,
+    colorbarProperties,
+    colormap,
+    opacityLinear,
+    setOpacityLinear,
+    setColormap,
+    opacity,
+  } = useViewportRendering(viewportId, {
+    displaySetInstanceUID: primaryOverlayDisplaySet?.displaySetInstanceUID,
+  });
+
+  const { hangingProtocolService, toolbarService, customizationService } = servicesManager.services;
+
+  const overlayColormapConfig =
+    customizationService.getCustomization('cornerstone.modalityOverlayDefaultColorMaps') || {};
+
+  const overlayColormapPresets =
+    overlayColormapConfig.presets ||
+    [
+      {
+        id: 'overlay-grayscale',
+        label: 'Grayscale',
+        colormapName: 'Grayscale',
+        defaultOpacity: 0.6,
+      },
+      {
+        id: 'overlay-hsv',
+        label: 'HSV',
+        colormapName: 'hsv',
+        defaultOpacity: 0.8,
+      },
+    ];
+
+  const selectedOverlayPresetId = useMemo(() => {
+    if (!colormap || !overlayColormapPresets?.length) {
+      return undefined;
+    }
+
+    const name = colormap.Name || colormap.name;
+    const preset = overlayColormapPresets.find(p => p.colormapName === name);
+    return preset?.id;
+  }, [colormap, overlayColormapPresets]);
 
   const [optimisticOverlayDisplaySets, setOptimisticOverlayDisplaySets] =
     useState(overlayDisplaySets);
@@ -310,6 +360,76 @@ function ViewportDataOverlayMenu({ viewportId }: withAppTypes<{ viewportId: stri
               </DropdownMenu>
             </div>
           ))}
+
+          {/* Overlay colormap & opacity controls (driven by primaryOverlayDisplaySet) */}
+          {primaryOverlayDisplaySet && overlayColormapPresets.length > 0 && (
+            <div className="mt-2 ml-7 space-y-2">
+              <div>
+                <div className="text-muted-foreground mb-1 text-xs">
+                  {t('WindowLevelActionMenu:Colormap')}
+                </div>
+                <Select
+                  value={selectedOverlayPresetId ?? overlayColormapPresets[0].id}
+                  onValueChange={presetId => {
+                    const preset = overlayColormapPresets.find(p => p.id === presetId);
+
+                    if (!preset || !colorbarProperties?.colormaps?.length) {
+                      return;
+                    }
+
+                    const colormapPreset = colorbarProperties.colormaps.find(
+                      c => c.Name === preset.colormapName
+                    );
+
+                    if (!colormapPreset) {
+                      return;
+                    }
+
+                    const targetOpacity =
+                      preset.defaultOpacity !== undefined ? preset.defaultOpacity : opacity ?? 1;
+
+                    setColormap({
+                      colormap: colormapPreset,
+                      opacity: targetOpacity,
+                      immediate: true,
+                    });
+                  }}
+                >
+                  <SelectTrigger className="h-7">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {overlayColormapPresets.map(preset => (
+                      <SelectItem
+                        key={preset.id}
+                        value={preset.id}
+                        className="pr-2"
+                      >
+                        {preset.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <div className="text-muted-foreground mb-1 flex items-center justify-between text-xs">
+                  <span>{t('Common:Opacity')}</span>
+                  <span>{Math.round((opacity ?? 1) * 100)}%</span>
+                </div>
+                <Slider
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={[opacityLinear ?? 1]}
+                  onValueChange={values => {
+                    const [value] = values;
+                    setOpacityLinear(value);
+                  }}
+                />
+              </div>
+            </div>
+          )}
 
           {pendingSegmentations.map(pendingId => (
             <div
