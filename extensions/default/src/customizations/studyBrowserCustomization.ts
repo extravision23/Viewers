@@ -57,9 +57,33 @@ export default {
     callbacks: [
       ({ activeViewportId, servicesManager, commandsManager, isHangingProtocolLayout }) =>
         async displaySetInstanceUID => {
-          const { hangingProtocolService, uiNotificationService } = servicesManager.services;
+          const {
+            hangingProtocolService,
+            uiNotificationService,
+            viewportGridService,
+            displaySetService,
+          } = servicesManager.services;
           let updatedViewports = [];
           const viewportId = activeViewportId;
+
+          // Store the series that was active in the target viewport at the moment of
+          // double‑click so that segmentation hydration can optionally use it as
+          // the cross‑reference target (e.g. SEG created on MR‑fusion but shown on CT).
+          const currentDisplaySetUIDs =
+            viewportGridService.getDisplaySetsUIDsForViewport(viewportId) || [];
+          const currentPrimaryDisplaySetInstanceUID = currentDisplaySetUIDs[0];
+
+          if (currentPrimaryDisplaySetInstanceUID) {
+            const clickedDisplaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+
+            if (
+              clickedDisplaySet &&
+              (clickedDisplaySet.Modality === 'SEG' || clickedDisplaySet.Modality === 'RTSTRUCT')
+            ) {
+              (clickedDisplaySet as any).targetViewportPrimaryDisplaySetInstanceUID =
+                currentPrimaryDisplaySetInstanceUID;
+            }
+          }
 
           try {
             updatedViewports = hangingProtocolService.getViewportsRequireUpdate(

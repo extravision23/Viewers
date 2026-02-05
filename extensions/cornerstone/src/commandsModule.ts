@@ -8,6 +8,7 @@ import {
   BaseVolumeViewport,
   getRenderingEngines,
   cache,
+  metaData,
 } from '@cornerstonejs/core';
 import {
   ToolGroupManager,
@@ -118,6 +119,162 @@ const segmentAI = new ONNXSegmentationController({
 });
 let segmentAIEnabled = false;
 
+const GEOMETRY_TOLERANCES = {
+  pixelSpacing: 1e-3,
+  orientation: 1e-4,
+};
+
+type DisplaySetGeometry = {
+  rows?: number;
+  columns?: number;
+  pixelSpacing?: [number, number];
+  imageOrientationPatient?: number[];
+  frameOfReferenceUID?: string;
+};
+
+function getFirstImageIdFromDisplaySet(displaySet: any): string | undefined {
+  if (!displaySet) {
+    return;
+  }
+
+  if (Array.isArray(displaySet.imageIds) && displaySet.imageIds.length) {
+    return displaySet.imageIds[0];
+  }
+
+  if (Array.isArray(displaySet.images) && displaySet.images.length) {
+    return displaySet.images[0].imageId;
+  }
+}
+
+function getDisplaySetGeometry(displaySet: any): DisplaySetGeometry | null {
+  const imageId = getFirstImageIdFromDisplaySet(displaySet);
+
+  if (!imageId) {
+    return null;
+  }
+
+  const imagePlaneModule: any = metaData.get('imagePlaneModule', imageId) || {};
+
+  const pixelSpacing =
+    imagePlaneModule.pixelSpacing ??
+    (imagePlaneModule.rowPixelSpacing != null && imagePlaneModule.columnPixelSpacing != null
+      ? [imagePlaneModule.rowPixelSpacing, imagePlaneModule.columnPixelSpacing]
+      : undefined);
+
+  const geometry: DisplaySetGeometry = {
+    rows: imagePlaneModule.rows,
+    columns: imagePlaneModule.columns,
+    pixelSpacing,
+    imageOrientationPatient: imagePlaneModule.imageOrientationPatient,
+    frameOfReferenceUID: imagePlaneModule.frameOfReferenceUID,
+  };
+
+  return geometry;
+}
+
+function nearlyEqual(a: number, b: number, tolerance: number): boolean {
+  return Math.abs(a - b) <= tolerance;
+}
+
+function areDisplaySetsGeometricallyCompatible(
+  referenceDisplaySet: any,
+  targetDisplaySet: any
+): boolean {
+  const refGeom = getDisplaySetGeometry(referenceDisplaySet);
+  const targetGeom = getDisplaySetGeometry(targetDisplaySet);
+
+  if (!refGeom || !targetGeom) {
+    return false;
+  }
+
+  if (refGeom.rows !== targetGeom.rows || refGeom.columns !== targetGeom.columns) {
+    return false;
+  }
+
+  if (refGeom.pixelSpacing && targetGeom.pixelSpacing) {
+    const [refRow, refCol] = refGeom.pixelSpacing;
+    const [tgtRow, tgtCol] = targetGeom.pixelSpacing;
+
+    if (
+      !nearlyEqual(refRow, tgtRow, GEOMETRY_TOLERANCES.pixelSpacing) ||
+      !nearlyEqual(refCol, tgtCol, GEOMETRY_TOLERANCES.pixelSpacing)
+    ) {
+      return false;
+    }
+  }
+
+  if (refGeom.imageOrientationPatient && targetGeom.imageOrientationPatient) {
+    for (let i = 0; i < 6; i++) {
+      if (
+        !nearlyEqual(
+          refGeom.imageOrientationPatient[i],
+          targetGeom.imageOrientationPatient[i],
+          GEOMETRY_TOLERANCES.orientation
+        )
+      ) {
+        return false;
+      }
+    }
+  }
+
+  if (
+    refGeom.frameOfReferenceUID &&
+    targetGeom.frameOfReferenceUID &&
+    refGeom.frameOfReferenceUID !== targetGeom.frameOfReferenceUID
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+async function askUseCurrentSeriesForSegmentation(
+  uiViewportDialogService: any,
+  viewportId: string
+): Promise<boolean> {
+  return new Promise(resolve => {
+    const actions = [
+      {
+        id: 'seg-open-current-no',
+        type: 'secondary',
+        text: i18n.t?.('Common:No') ?? 'No',
+        value: false,
+      },
+      {
+        id: 'seg-open-current-yes',
+        type: 'primary',
+        text: i18n.t?.('Common:Yes') ?? 'Yes',
+        value: true,
+      },
+    ];
+
+    const onSubmit = (result: boolean) => {
+      uiViewportDialogService.hide();
+      resolve(!!result);
+    };
+
+    uiViewportDialogService.show({
+      id: 'seg-open-on-current-series',
+      viewportId,
+      type: 'info',
+      message:
+        i18n.t?.('Segmentation:OpenInCurrentSeriesQuestion') ??
+        'Open this segmentation on the current series?',
+      actions,
+      onSubmit,
+      onOutsideClick: () => {
+        uiViewportDialogService.hide();
+        resolve(false);
+      },
+      onKeyPress: (event: KeyboardEvent) => {
+        if (event.key === 'Enter') {
+          onSubmit(true);
+        }
+      },
+    });
+  });
+}
+
 function commandsModule({
   servicesManager,
   commandsManager,
@@ -138,6 +295,7 @@ function commandsModule({
     syncGroupService,
     segmentationService,
     displaySetService,
+    uiViewportDialogService,
   } = servicesManager.services as AppTypes.Services;
 
   function _getActiveViewportEnabledElement() {
@@ -306,12 +464,14 @@ function commandsModule({
         return;
       }
 
+      let segmentationType: csToolsEnums.SegmentationRepresentations | undefined;
+
       if (displaySet.isOverlayDisplaySet) {
         // update the previously stored segmentationPresentation with the new viewportId
         // presentation so that when we put the referencedDisplaySet back in the viewport
         // it will have the correct segmentation representation hydrated
 
-        const segmentationType =
+        segmentationType =
           // Todo: check if PMAP modality should be handled such as SEG
           displaySet.Modality !== 'SEG'
             ? SegmentationRepresentations.Contour
@@ -341,12 +501,96 @@ function commandsModule({
         const referencedDisplaySet = displaySetService.getDisplaySetByUID(
           referencedDisplaySetInstanceUID
         );
-        storePositionPresentation(referencedDisplaySet);
+
+        if (!referencedDisplaySet) {
+          console.warn(
+            'hydrateSecondaryDisplaySet: referenced display set not found for segmentation'
+          );
+          return;
+        }
+
+        // Try to use the series that was active in the viewport at the moment of
+        // double‑click (stored on the SEG/RTSTRUCT displaySet) if it is geometrically
+        // compatible with the referenced series. This enables “cross‑reference”
+        // segmentations such as MR→CT fusion without resampling.
+        let targetDisplaySet = referencedDisplaySet;
+        let appliedToOverrideSeries = false;
+
+        const overridePrimaryDisplaySetInstanceUID =
+          (displaySet as any).targetViewportPrimaryDisplaySetInstanceUID;
+
+        let candidatePrimaryDisplaySet =
+          overridePrimaryDisplaySetInstanceUID &&
+          displaySetService.getDisplaySetByUID(overridePrimaryDisplaySetInstanceUID);
+
+        // Fallback: derive a non‑overlay, non‑SEG/RTSTRUCT series currently assigned
+        // to this viewport if no explicit override was stored.
+        if (!candidatePrimaryDisplaySet) {
+          const currentDisplaySetInstanceUIDs =
+            viewportGridService.getDisplaySetsUIDsForViewport(viewportId) || [];
+
+          const nonOverlayCandidates = currentDisplaySetInstanceUIDs
+            .map(uid => displaySetService.getDisplaySetByUID(uid))
+            .filter(
+              ds =>
+                ds &&
+                !ds.isOverlayDisplaySet &&
+                ds.Modality !== 'SEG' &&
+                ds.Modality !== 'RTSTRUCT'
+            );
+
+          candidatePrimaryDisplaySet = nonOverlayCandidates[0];
+        }
+
+        if (
+          candidatePrimaryDisplaySet &&
+          candidatePrimaryDisplaySet.displaySetInstanceUID !==
+            referencedDisplaySet.displaySetInstanceUID
+        ) {
+          const compatible = areDisplaySetsGeometricallyCompatible(
+            referencedDisplaySet,
+            candidatePrimaryDisplaySet
+          );
+
+          if (compatible) {
+            const useCurrent = await askUseCurrentSeriesForSegmentation(
+              uiViewportDialogService,
+              viewportId
+            );
+
+            if (useCurrent) {
+              targetDisplaySet = candidatePrimaryDisplaySet;
+              appliedToOverrideSeries = true;
+            }
+          }
+        }
+
+        storePositionPresentation(targetDisplaySet);
 
         const results = commandsManager.runCommand('loadSegmentationDisplaySetsForViewport', {
           viewportId,
-          displaySetInstanceUIDs: [referencedDisplaySet.displaySetInstanceUID],
+          displaySetInstanceUIDs: [targetDisplaySet.displaySetInstanceUID],
         });
+
+        // If we explicitly chose to show the segmentation on a different (but
+        // geometrically compatible) series than the one referenced by the SEG,
+        // ensure that a segmentation representation is attached to this viewport.
+        // Hanging protocol matching will typically not attach this SEG to the
+        // non‑referenced series automatically.
+        if (appliedToOverrideSeries && segmentationType != null) {
+          try {
+            segmentationService.addSegmentationRepresentation(viewportId, {
+              segmentationId: displaySet.displaySetInstanceUID,
+              type: segmentationType,
+            });
+            segmentationService.setActiveSegmentation(viewportId, displaySet.displaySetInstanceUID);
+          } catch (error) {
+            console.warn(
+              'Failed to attach segmentation representation to override series viewport',
+              error
+            );
+          }
+        }
 
         const disableEditing = customizationService.getCustomization(
           'panelSegmentation.disableEditing'
