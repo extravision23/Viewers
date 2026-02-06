@@ -567,9 +567,23 @@ function commandsModule({
 
         storePositionPresentation(targetDisplaySet);
 
+        // Preserve existing non‑segmentation layers (e.g. MR overlay) when
+        // hydrating a SEG for this viewport. We only need to guarantee that
+        // the targetDisplaySet (typically CT) is present in the viewport.
+        const currentDisplaySetUIDs =
+          viewportGridService.getDisplaySetsUIDsForViewport(viewportId) || [];
+
+        const hasTarget = currentDisplaySetUIDs.includes(
+          targetDisplaySet.displaySetInstanceUID
+        );
+
+        const nextDisplaySetUIDs = hasTarget
+          ? currentDisplaySetUIDs
+          : [targetDisplaySet.displaySetInstanceUID, ...currentDisplaySetUIDs];
+
         const results = commandsManager.runCommand('loadSegmentationDisplaySetsForViewport', {
           viewportId,
-          displaySetInstanceUIDs: [targetDisplaySet.displaySetInstanceUID],
+          displaySetInstanceUIDs: nextDisplaySetUIDs,
         });
 
         // If we explicitly chose to show the segmentation on a different (but
@@ -2342,11 +2356,44 @@ function commandsModule({
         displaySetInstanceUIDs,
       });
 
-      actions.setDisplaySetsForViewports({
-        viewportsToUpdate: updatedViewports.map(viewport => ({
+      // Merge incoming displaySetInstanceUIDs with any existing ones for each viewport,
+      // to avoid dropping additional layers such as MR overlays when a SEG is loaded.
+      // However, SEG‑dedicated viewports (which show only SEG series) must keep a
+      // single SEG display set, otherwise the SEG viewport component will throw.
+      const viewportsToUpdate = updatedViewports.map(viewport => {
+        const resultingUIDs = viewport.displaySetInstanceUIDs || [];
+
+        const isSegOnlyViewport =
+          resultingUIDs.length > 0 &&
+          resultingUIDs.every(uid => {
+            const ds = displaySetService.getDisplaySetByUID(uid);
+            return ds?.Modality === 'SEG';
+          });
+
+        if (isSegOnlyViewport) {
+          // Do not merge anything into SEG‑only viewports; keep exactly what the
+          // hanging protocol specified.
+          return {
+            viewportId: viewport.viewportId,
+            displaySetInstanceUIDs: resultingUIDs,
+          };
+        }
+
+        const existingUIDs =
+          viewportGridService.getDisplaySetsUIDsForViewport(viewport.viewportId) || [];
+
+        const mergedUIDs = Array.from(
+          new Set([...(existingUIDs || []), ...(viewport.displaySetInstanceUIDs || [])])
+        );
+
+        return {
           viewportId: viewport.viewportId,
-          displaySetInstanceUIDs: viewport.displaySetInstanceUIDs,
-        })),
+          displaySetInstanceUIDs: mergedUIDs,
+        };
+      });
+
+      actions.setDisplaySetsForViewports({
+        viewportsToUpdate,
       });
     },
     setViewportOrientation: ({ viewportId, orientation }) => {
