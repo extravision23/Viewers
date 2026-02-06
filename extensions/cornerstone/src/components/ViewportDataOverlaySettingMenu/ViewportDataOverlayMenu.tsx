@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { useViewportDisplaySets } from '../../hooks/useViewportDisplaySets';
 import SelectItemWithModality from '../SelectItemWithModality';
 import { useViewportRendering } from '../../hooks';
+import { DERIVED_OVERLAY_MODALITIES } from './utils';
 
 function ViewportDataOverlayMenu({ viewportId }: withAppTypes<{ viewportId: string }>) {
   const { commandsManager, servicesManager } = useSystem();
@@ -37,12 +38,14 @@ function ViewportDataOverlayMenu({ viewportId }: withAppTypes<{ viewportId: stri
   } = useViewportDisplaySets(viewportId);
 
   // Decide which display set we treat as the "overlay" for colormap/opacity controls:
-  // 1. true overlayDisplaySets (SEG/RTSTRUCT);
-  // 2. otherwise, any non-background foreground/fusion series.
+  // Ми завжди хочемо керувати НЕ сегментаціями (SEG/RTSTRUCT), а інтенсивністю
+  // "анатомічного"/ф’южн шару поверх фону (CT/MR/PT).
   const primaryOverlayDisplaySet =
-    overlayDisplaySets?.[0] ||
-    foregroundDisplaySets?.[0] ||
-    (viewportDisplaySets?.length > 1 ? viewportDisplaySets[1] : undefined);
+    viewportDisplaySets?.find(
+      ds =>
+        ds.displaySetInstanceUID !== backgroundDisplaySet?.displaySetInstanceUID &&
+        !DERIVED_OVERLAY_MODALITIES.includes(ds.Modality)
+    ) || undefined;
 
   const {
     toggleColorbar,
