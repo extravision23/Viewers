@@ -9,6 +9,7 @@ const StudyListTableRow = props => {
   const {
     row,
     expandedContent,
+    fusionButton,
     onClickRow,
     isExpanded,
     dataCY,
@@ -23,6 +24,13 @@ const StudyListTableRow = props => {
   } = tableData;
   return (
     <>
+      {fusionButton && (
+        <tr>
+          <td className="border-0 p-0">
+            <div className="mb-2 flex justify-center">{fusionButton}</div>
+          </td>
+        </tr>
+      )}
       <tr
         className="select-none"
         data-cy={dataCY}
@@ -172,6 +180,7 @@ StudyListTableRow.propTypes = {
       })
     ).isRequired,
     expandedContent: PropTypes.node.isRequired,
+    fusionButton: PropTypes.node,
     onClickRow: PropTypes.func.isRequired,
     isExpanded: PropTypes.bool.isRequired,
     dataCY: PropTypes.string,
