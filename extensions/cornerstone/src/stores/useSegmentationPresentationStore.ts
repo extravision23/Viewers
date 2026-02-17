@@ -150,9 +150,28 @@ const _getSegmentationPresentationId = ({
     orientation = getViewportOrientationFromImageOrientationPatient(imageOrientationPatient);
   }
 
-  const segmentationPresentationArr = [];
+  const displaySetService = servicesManager.services.displaySetService;
+  const primaryDisplaySetUIDs = displaySetInstanceUIDs.filter(uid => {
+    const ds = displaySetService.getDisplaySetByUID(uid);
+    return (
+      ds &&
+      !ds.isOverlayDisplaySet &&
+      ds.Modality !== 'SEG' &&
+      ds.Modality !== 'RTSTRUCT'
+    );
+  });
 
-  segmentationPresentationArr.push(...displaySetInstanceUIDs);
+  const segmentationPresentationArr = [];
+  segmentationPresentationArr.push(
+    ...(primaryDisplaySetUIDs.length ? primaryDisplaySetUIDs : displaySetInstanceUIDs)
+  );
+
+  console.debug('[SegPresentation] getSegmentationPresentationId', {
+    viewportId: viewport?.viewportOptions?.viewportId,
+    displaySetInstanceUIDs,
+    primaryDisplaySetUIDs,
+    presentationId: segmentationPresentationArr.join(JOIN_STR),
+  });
 
   // Uncomment if unique indexing is needed
   // addUniqueIndex(

@@ -71,6 +71,7 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
   const [isRunningOneClick, setIsRunningOneClick] = useState(false);
   const [isRunningByPreset, setIsRunningByPreset] = useState(false);
   const [isRunningTotalSegmentator, setIsRunningTotalSegmentator] = useState(false);
+  const [isRunningSpineSegmentator, setIsRunningSpineSegmentator] = useState(false);
   const [selectedPresets, setSelectedPresets] = useState<string[]>(['bone']);
   const [minHu, setMinHu] = useState<string>('300');
   const [maxHu, setMaxHu] = useState<string>('3000');
@@ -454,7 +455,143 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
     }
   };
 
-  const isDisabled = mode === 'loading' || isRunningOneClick || isRunningByPreset || isRunningTotalSegmentator;
+  const handleSpineSegmentatorClick = async () => {
+    if (isRunningSpineSegmentator) {
+      return;
+    }
+
+    const { viewportGridService, displaySetService } = servicesManager.services;
+    const viewportId = viewportGridService.getActiveViewportId();
+    const { viewports } = viewportGridService.getState();
+    const viewport = viewports.get(viewportId);
+
+    if (!viewport?.displaySetInstanceUIDs?.length) {
+      uiNotificationService?.show({
+        title: 'Spine Segmentation',
+        message: 'No active viewport/series found. Click a viewport first.',
+        type: 'error',
+      });
+      return;
+    }
+
+    const displaySetInstanceUID = viewport.displaySetInstanceUIDs[0];
+    const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+
+    if (!displaySet) {
+      uiNotificationService?.show({
+        title: 'Spine Segmentation',
+        message: 'No display set found for active viewport.',
+        type: 'error',
+      });
+      return;
+    }
+
+    try {
+      setIsRunningSpineSegmentator(true);
+
+      // Get spine segmentation tasks from server
+      const config = activeDataSource?.getConfig?.();
+      if (!config) {
+        throw new Error('No data source configuration found');
+      }
+
+      const tasksUrl = buildFunctionUrl(config, 'GetSpineSegTasks');
+      const tasksResponse = await fetch(tasksUrl, {
+        method: 'GET',
+        headers: {
+          ...getAuthHeader(activeDataSource),
+        },
+        credentials: 'include',
+      });
+
+      if (!tasksResponse.ok) {
+        throw new Error(`Failed to fetch spine tasks: ${tasksResponse.status}`);
+      }
+
+      const tasksData = await tasksResponse.json();
+      const tasks = tasksData.tasks || [];
+
+      if (tasks.length === 0) {
+        uiNotificationService?.show({
+          title: 'Spine Segmentation',
+          message: 'No spine segmentation tasks available.',
+          type: 'error',
+        });
+        return;
+      }
+
+      // Show modal for spine task selection
+      show({
+        content: TotalSegmentatorTaskModal,
+        title: 'Select a spine segmentation task',
+        containerClassName: 'max-w-2xl',
+        contentProps: {
+          tasks,
+          onRun: async (taskName: string) => {
+            hide();
+            await runSpineSegmentator(taskName, displaySet, viewportId);
+          },
+          onClose: hide,
+        },
+      });
+    } catch (e) {
+      console.error('Error fetching spine segmentation tasks:', e);
+      uiNotificationService?.show({
+        title: 'Spine Segmentation',
+        message: 'Failed to fetch spine segmentation tasks. Check console for details.',
+        type: 'error',
+      });
+    } finally {
+      setIsRunningSpineSegmentator(false);
+    }
+  };
+
+  const runSpineSegmentator = async (
+    taskName: string,
+    displaySet: any,
+    viewportId: string
+  ) => {
+    const { StudyInstanceUID: studyInstanceUID, SeriesInstanceUID: seriesInstanceUID } =
+      displaySet;
+
+    try {
+      setIsRunningSpineSegmentator(true);
+      uiNotificationService?.show({
+        title: 'Spine Segmentation',
+        message: 'Starting spine segmentation, please wait…',
+        type: 'info',
+      });
+
+      await commandsManager.runCommand('totalSpineSegmentator', {
+        studyInstanceUID,
+        seriesInstanceUID,
+        taskName,
+        viewportId,
+      });
+
+      uiNotificationService?.show({
+        title: 'Spine Segmentation',
+        message: 'Spine segmentation request triggered successfully.',
+        type: 'success',
+      });
+    } catch (e) {
+      console.error('Spine Segmentation failed', e);
+      uiNotificationService?.show({
+        title: 'Spine Segmentation',
+        message: 'Spine segmentation request failed.',
+        type: 'error',
+      });
+    } finally {
+      setIsRunningSpineSegmentator(false);
+    }
+  };
+
+  const isDisabled =
+    mode === 'loading' ||
+    isRunningOneClick ||
+    isRunningByPreset ||
+    isRunningTotalSegmentator ||
+    isRunningSpineSegmentator;
   const isHuRangeDisabled = selectedPresets.length !== 1;
 
   return (
@@ -493,6 +630,17 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
             }`}
           >
             {isRunningTotalSegmentator ? 'Loading tasks…' : 'Run Total Segmentator'}
+          </button>
+          <button
+            onClick={handleSpineSegmentatorClick}
+            disabled={isDisabled}
+            className={`w-full rounded-md px-4 py-2 font-medium transition-colors ${
+              isDisabled
+                ? 'cursor-not-allowed bg-gray-600 text-gray-400'
+                : 'bg-gray-700 text-white hover:bg-gray-600'
+            }`}
+          >
+            {isRunningSpineSegmentator ? 'Loading tasks…' : 'Run Spine Segmentation'}
           </button>
         </div>
 

@@ -276,7 +276,17 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     }
 
     if (segmentationPresentationId) {
-      setSegmentationPresentation(segmentationPresentationId, segmentationPresentation);
+      const { segmentationPresentationStore } = useSegmentationPresentationStore.getState();
+      const existingPresentation = segmentationPresentationStore[segmentationPresentationId];
+      const hasExisting = Array.isArray(existingPresentation) && existingPresentation.length > 0;
+      const isIncomingEmpty =
+        !segmentationPresentation || (Array.isArray(segmentationPresentation) && !segmentationPresentation.length);
+
+      // Avoid overwriting a stored segmentation presentation with an empty one
+      // during viewport updates (e.g., hydration flows).
+      if (!(hasExisting && isIncomingEmpty)) {
+        setSegmentationPresentation(segmentationPresentationId, segmentationPresentation);
+      }
     }
 
     if (synchronizers?.length) {
@@ -1440,6 +1450,9 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     segmentationPresentation: SegmentationPresentation
   ): void {
     if (!segmentationPresentation) {
+      console.debug('[SegPresentation] no segmentationPresentation for viewport', {
+        viewportId: viewport?.id,
+      });
       return;
     }
 
@@ -1447,6 +1460,11 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     const viewportInfo = this.getViewportInfo(viewport.id);
     const viewportOptions = viewportInfo?.getViewportOptions();
     const shouldHideVolume = viewportOptions?.customViewportProps?.hideVolume;
+
+    console.debug('[SegPresentation] apply segmentationPresentation', {
+      viewportId: viewport.id,
+      items: segmentationPresentation,
+    });
 
     segmentationPresentation.forEach((presentationItem: SegmentationPresentationItem) => {
       const { segmentationId, type, hydrated } = presentationItem;

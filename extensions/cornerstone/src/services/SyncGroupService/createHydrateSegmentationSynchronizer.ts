@@ -78,15 +78,13 @@ const segmentationRepresentationModifiedCallback = async (
   const sourceFOR = sourceCsViewport.getFrameOfReferenceUID?.();
   const targetFOR = viewport.getFrameOfReferenceUID?.();
 
-  const bothHaveFOR = !!sourceFOR && !!targetFOR;
-
   // If both source and target have FOR, they must match
-  if (bothHaveFOR && sourceFOR !== targetFOR) {
+  if (sourceFOR && targetFOR && sourceFOR !== targetFOR) {
     return;
   }
 
-  // If at least one FOR is missing, require a shared display set
-  if (!bothHaveFOR && !sharedDisplaySetExists) {
+  // If target FOR is missing, require a shared display set
+  if (!targetFOR && !sharedDisplaySetExists) {
     return;
   }
 

@@ -42,12 +42,18 @@ import { Types } from '@ohif/ui';
 import { preserveQueryParameters, preserveQueryStrings } from '../../utils/preserveQueryParameters';
 import { buildFunctionUrl } from '../../utils/buildFunctionUrl';
 import FusionSeriesSelectionModal from './FusionSeriesSelectionModal';
+import { DicomMetadataStore } from '@ohif/core';
 
 const PatientInfoVisibility = Types.PatientInfoVisibility;
 
 const { sortBySeriesDate } = utils;
 
 const seriesInStudiesMap = new Map();
+
+// Fusion filtering constants
+const MIN_FUSION_NUM_INSTANCES = 16;
+const MAX_FUSION_SLICE_THICKNESS_MM = 5;
+const MAX_FUSION_SPACING_BETWEEN_SLICES_MM = 5;
 
 function getAuthHeader(dataSource) {
   const bearer = dataSource?.retrieve?.customClient?.headers?.Authorization;
@@ -144,6 +150,7 @@ function WorkList({
   // ~ Fusion Study Selection
   const [selectedCTStudy, setSelectedCTStudy] = useState<string | null>(null);
   const [selectedMRStudy, setSelectedMRStudy] = useState<string | null>(null);
+  const [isFusionLoading, setIsFusionLoading] = useState<boolean>(false);
   const querying = useMemo(() => {
     return isLoadingData || expandedRows.length > 0;
   }, [isLoadingData, expandedRows]);
@@ -214,13 +221,31 @@ function WorkList({
     }
   };
 
+  const refreshSeriesForStudy = async studyInstanceUid => {
+    if (!studyInstanceUid) {
+      return;
+    }
+
+    try {
+      const series = await dataSource.query.series.search(studyInstanceUid);
+      seriesInStudiesMap.set(studyInstanceUid, sortBySeriesDate(series));
+      // Trigger rerender even if the study is already in the list
+      setStudiesWithSeriesData(prev => [...prev]);
+    } catch (ex) {
+      console.warn('Failed to refresh series for study after fusion:', studyInstanceUid, ex);
+    }
+  };
+
   // Fetch series for selected studies if not already fetched
   useEffect(() => {
     const fetchSeriesForSelectedStudies = async () => {
       const studiesToFetch = [selectedCTStudy, selectedMRStudy].filter(Boolean);
 
       for (const studyInstanceUid of studiesToFetch) {
-        if (!seriesInStudiesMap.has(studyInstanceUid) && !studiesWithSeriesData.includes(studyInstanceUid)) {
+        if (
+          !seriesInStudiesMap.has(studyInstanceUid) &&
+          !studiesWithSeriesData.includes(studyInstanceUid)
+        ) {
           try {
             const series = await dataSource.query.series.search(studyInstanceUid);
             seriesInStudiesMap.set(studyInstanceUid, sortBySeriesDate(series));
@@ -239,28 +264,37 @@ function WorkList({
 
   // Handle Fusion button click
   const handleFusionClick = async () => {
-    if (!selectedCTStudy || !selectedMRStudy) {
+    if (!selectedCTStudy || !selectedMRStudy || isFusionLoading) {
       return;
+    }
+
+    try {
+      // Load full metadata for both studies to get instance-level information
+      await Promise.all([
+        dataSource.retrieve.series.metadata({
+          StudyInstanceUID: selectedCTStudy,
+        }),
+        dataSource.retrieve.series.metadata({
+          StudyInstanceUID: selectedMRStudy,
+        }),
+      ]);
+    } catch (error) {
+      console.warn('Failed to load series metadata:', error);
+      // Continue with filtering even if metadata loading fails
     }
 
     // Get series for both studies
     const ctSeries = seriesInStudiesMap.get(selectedCTStudy) || [];
     const mrSeries = seriesInStudiesMap.get(selectedMRStudy) || [];
 
-    // Filter CT and MR series (excluding MR with Fusion in description)
-    const filteredCTSeries = ctSeries.filter(s => {
-      const modality = (s.modality || s.Modality || '').trim();
-      return modality === 'CT';
-    });
-
-    const filteredMRSeries = mrSeries.filter(s => {
-      const modality = (s.modality || s.Modality || '').trim();
-      const description = (s.description || '').trim();
-      return modality === 'MR' && !description.toLowerCase().includes('fusion');
-    });
+    // Filter CT and MR series using fusion suitability rules
+    const filteredCTSeries = ctSeries; //.filter(s => isSeriesValidForFusion(s, 'CT', selectedCTStudy));
+    const filteredMRSeries = mrSeries; //.filter(s => isSeriesValidForFusion(s, 'MR', selectedMRStudy));
 
     // Check if we need to show the modal (more than one CT or MR series)
     if (filteredCTSeries.length > 1 || filteredMRSeries.length > 1) {
+      // We are only preparing fusion, not running it yet – don't keep loading state
+      setIsFusionLoading(false);
       // Show modal for series selection
       show({
         content: FusionSeriesSelectionModal,
@@ -287,11 +321,13 @@ function WorkList({
       });
     } else if (filteredCTSeries.length === 1 && filteredMRSeries.length === 1) {
       // Direct fusion with single series each
+      setIsFusionLoading(true);
       handleFusionRequest(
         filteredCTSeries[0].seriesInstanceUid,
         filteredMRSeries[0].seriesInstanceUid
       );
     } else {
+      setIsFusionLoading(false);
       toast.error('No valid CT or MR series found for fusion.');
     }
   };
@@ -302,9 +338,15 @@ function WorkList({
       return;
     }
 
+    const ctStudyInstanceUID = selectedCTStudy;
+    const mrStudyInstanceUID = selectedMRStudy;
+
+    // Show loading on Fusion button during the whole request
+    setIsFusionLoading(true);
+
     // Get series descriptions for notification
-    const ctSeries = seriesInStudiesMap.get(selectedCTStudy) || [];
-    const mrSeries = seriesInStudiesMap.get(selectedMRStudy) || [];
+    const ctSeries = seriesInStudiesMap.get(ctStudyInstanceUID) || [];
+    const mrSeries = seriesInStudiesMap.get(mrStudyInstanceUID) || [];
 
     const ctSeriesData = ctSeries.find(s => s.seriesInstanceUid === ctSeriesInstanceUID);
     const mrSeriesData = mrSeries.find(s => s.seriesInstanceUid === mrSeriesInstanceUID);
@@ -321,9 +363,9 @@ function WorkList({
     try {
       const endpoint = buildFunctionUrl(config, 'fusion/ct-mr');
       const payload = {
-        ctStudyInstanceUID: selectedCTStudy,
+        ctStudyInstanceUID,
         ctSeriesInstanceUID: ctSeriesInstanceUID,
-        mrStudyInstanceUID: selectedMRStudy,
+        mrStudyInstanceUID,
         mrSeriesInstanceUID: mrSeriesInstanceUID,
         mode: 'rigid',
       };
@@ -350,15 +392,27 @@ function WorkList({
 
       // Try to parse JSON, but handle non-JSON responses
       try {
-        const result = await response.json();
+        await response.json();
         toast.success(`Fusion completed successfully.`);
       } catch (e) {
         // If response is not JSON, still consider it successful if status is OK
         toast.success(`Fusion completed successfully.`);
       }
+
+      // Refresh series list for CT study to show newly created fusion series
+      try {
+        await refreshSeriesForStudy(ctStudyInstanceUID);
+      } catch (refreshError) {
+        console.warn('Failed to refresh CT study series after fusion:', refreshError);
+      }
     } catch (error) {
       console.error('Fusion request failed:', error);
       toast.error(`Fusion failed: ${error.message || 'Unknown error'}`);
+    } finally {
+      // Hide loading and Fusion button after completion (success or failure)
+      setIsFusionLoading(false);
+      setSelectedCTStudy(null);
+      setSelectedMRStudy(null);
     }
   };
 
@@ -443,15 +497,222 @@ function WorkList({
   };
 
   // Helper functions for modality checking
+  const getSeriesDescription = (series): string =>
+    (series.description || series.SeriesDescription || '').trim();
+
+  const getSeriesModality = (series): string => (series.modality || series.Modality || '').trim();
+
+  // Get series metadata from DicomMetadataStore (after retrieve.series.metadata has been called)
+  const getSeriesMetadataFromStore = (series, studyInstanceUid: string) => {
+    const seriesInstanceUid = series.seriesInstanceUid || series.SeriesInstanceUID;
+
+    if (!studyInstanceUid || !seriesInstanceUid) {
+      return null;
+    }
+
+    try {
+      const seriesFromStore = DicomMetadataStore.getSeries(studyInstanceUid, seriesInstanceUid);
+      return seriesFromStore || null;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // Get number of instances from metadata store or series summary
+  const getSeriesNumInstances = (series, studyInstanceUid?: string): number => {
+    // First try to get from DicomMetadataStore (after metadata has been loaded)
+    if (studyInstanceUid) {
+      const seriesFromStore = getSeriesMetadataFromStore(series, studyInstanceUid);
+      if (
+        seriesFromStore &&
+        seriesFromStore.instances &&
+        Array.isArray(seriesFromStore.instances)
+      ) {
+        return seriesFromStore.instances.length;
+      }
+    }
+
+    // Fallback to series summary fields
+    const value = series.numSeriesInstances ?? series.numInstances ?? series.NumInstances;
+
+    if (value === undefined || value === null) {
+      return 0; // Unknown - don't filter
+    }
+
+    const asNumber = Number(value);
+    return Number.isFinite(asNumber) && asNumber > 0 ? asNumber : 0;
+  };
+
+  // Get slice thickness from first instance in metadata store or series summary
+  const getSeriesSliceThickness = (series, studyInstanceUid?: string): number => {
+    // First try to get from first instance in DicomMetadataStore
+    if (studyInstanceUid) {
+      const seriesFromStore = getSeriesMetadataFromStore(series, studyInstanceUid);
+      if (seriesFromStore && seriesFromStore.instances && seriesFromStore.instances.length > 0) {
+        const firstInstance = seriesFromStore.instances[0];
+        const thickness = firstInstance.SliceThickness || firstInstance.sliceThickness;
+        if (thickness !== undefined && thickness !== null) {
+          const asNumber = Number(thickness);
+          if (Number.isFinite(asNumber) && asNumber > 0) {
+            return asNumber;
+          }
+        }
+      }
+    }
+
+    // Fallback to series summary fields
+    const raw =
+      series.SliceThickness ??
+      series.sliceThickness ??
+      (series.PixelMeasures && series.PixelMeasures.SliceThickness);
+
+    if (raw === undefined || raw === null) {
+      return 0; // Not available - don't filter
+    }
+
+    const asNumber = Number(raw);
+    return Number.isFinite(asNumber) && asNumber > 0 ? asNumber : 0;
+  };
+
+  // Get spacing between slices from first instance in metadata store or series summary
+  const getSeriesSpacingBetweenSlices = (series, studyInstanceUid?: string): number => {
+    // First try to get from first instance in DicomMetadataStore
+    if (studyInstanceUid) {
+      const seriesFromStore = getSeriesMetadataFromStore(series, studyInstanceUid);
+      if (seriesFromStore && seriesFromStore.instances && seriesFromStore.instances.length > 0) {
+        const firstInstance = seriesFromStore.instances[0];
+        const spacing = firstInstance.SpacingBetweenSlices || firstInstance.spacingBetweenSlices;
+        if (spacing !== undefined && spacing !== null) {
+          const asNumber = Number(spacing);
+          if (Number.isFinite(asNumber) && asNumber > 0) {
+            return asNumber;
+          }
+        }
+      }
+    }
+
+    // Fallback to series summary fields
+    const raw =
+      series.SpacingBetweenSlices ??
+      series.spacingBetweenSlices ??
+      (series.PixelMeasures && series.PixelMeasures.SpacingBetweenSlices);
+
+    if (raw === undefined || raw === null) {
+      return 0; // Not available - don't filter
+    }
+
+    const asNumber = Number(raw);
+    return Number.isFinite(asNumber) && asNumber > 0 ? asNumber : 0;
+  };
+
+  // Check if series is a localizer/scout based on description and ImageType from metadata store
+  const isSeriesLocalizer = (series, studyInstanceUid?: string): boolean => {
+    const description = getSeriesDescription(series).toLowerCase();
+
+    // Check description first (always available)
+    if (description.includes('localizer') || description.includes('scout')) {
+      return true;
+    }
+
+    // Try to get ImageType from first instance in DicomMetadataStore
+    if (studyInstanceUid) {
+      const seriesFromStore = getSeriesMetadataFromStore(series, studyInstanceUid);
+      if (seriesFromStore && seriesFromStore.instances && seriesFromStore.instances.length > 0) {
+        const firstInstance = seriesFromStore.instances[0];
+        const imageType = firstInstance.ImageType || firstInstance.imageType;
+        if (imageType) {
+          let imageTypeString = '';
+          if (Array.isArray(imageType)) {
+            imageTypeString = imageType.join('\\');
+          } else if (typeof imageType === 'string') {
+            imageTypeString = imageType;
+          }
+          const imageTypeLower = imageTypeString.toLowerCase();
+          if (imageTypeLower.includes('localizer')) {
+            return true;
+          }
+        }
+      }
+    }
+
+    // Fallback to series summary ImageType (if available)
+    const imageType = series.ImageType || series.imageType;
+    if (imageType) {
+      let imageTypeString = '';
+      if (Array.isArray(imageType)) {
+        imageTypeString = imageType.join('\\');
+      } else if (typeof imageType === 'string') {
+        imageTypeString = imageType;
+      }
+      const imageTypeLower = imageTypeString.toLowerCase();
+      if (imageTypeLower.includes('localizer')) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const isSeriesValidForFusion = (
+    series,
+    modality: 'CT' | 'MR',
+    studyInstanceUid?: string
+  ): boolean => {
+    const seriesModality = getSeriesModality(series);
+    if (seriesModality !== modality) {
+      return false;
+    }
+
+    // Filter obvious non-diagnostic/localizer series (always check description)
+    if (isSeriesLocalizer(series, studyInstanceUid)) {
+      return false;
+    }
+
+    // For MR additionally ignore Fusion result series
+    if (modality === 'MR') {
+      const description = getSeriesDescription(series).toLowerCase();
+      if (description.includes('fusion')) {
+        return false;
+      }
+    }
+
+    // Filter by number of instances when information is available
+    // Only filter if we have a valid number and it's less than threshold
+    const numInstances = getSeriesNumInstances(series, studyInstanceUid);
+    if (numInstances > 0 && numInstances < MIN_FUSION_NUM_INSTANCES) {
+      return false;
+    }
+
+    // Filter by slice thickness / spacing if available
+    // Only filter if we have valid values that exceed threshold
+    const sliceThickness = getSeriesSliceThickness(series, studyInstanceUid);
+    const spacingBetweenSlices = getSeriesSpacingBetweenSlices(series, studyInstanceUid);
+
+    if (
+      (sliceThickness > 0 && sliceThickness > MAX_FUSION_SLICE_THICKNESS_MM) ||
+      (spacingBetweenSlices > 0 && spacingBetweenSlices > MAX_FUSION_SPACING_BETWEEN_SLICES_MM)
+    ) {
+      return false;
+    }
+
+    return true;
+  };
+
+  // Helper functions for modality checking
   const hasModality = (modalities: string, modality: string): boolean => {
-    if (!modalities) return false;
+    if (!modalities) {
+      return false;
+    }
     // Modalities can be separated by '/' or '\'
     const modalityList = modalities.split(/[/\\]/).map(m => m.trim());
     return modalityList.includes(modality);
   };
 
   // Check if study has CT or MR by checking both study-level modalities and series data
-  const studyHasCTOrMR = (studyInstanceUid: string, modalities: string): { hasCT: boolean; hasMR: boolean } => {
+  const studyHasCTOrMR = (
+    studyInstanceUid: string,
+    modalities: string
+  ): { hasCT: boolean; hasMR: boolean } => {
     let hasCT = false;
     let hasMR = false;
 
@@ -470,19 +731,15 @@ function WorkList({
         hasCT = false;
         hasMR = false;
         for (const s of series) {
-          const seriesModality = (s.modality || s.Modality || '').trim();
-          const seriesDescription = (s.description || '').trim();
-
-          if (seriesModality === 'CT') {
+          if (isSeriesValidForFusion(s, 'CT', studyInstanceUid)) {
             hasCT = true;
-          } else if (seriesModality === 'MR') {
-            // Ignore MR modalities that have "Fusion" in description
-            if (!seriesDescription.toLowerCase().includes('fusion')) {
-              hasMR = true;
-            }
+          } else if (isSeriesValidForFusion(s, 'MR', studyInstanceUid)) {
+            hasMR = true;
           }
           // If we found both, we can break early
-          if (hasCT && hasMR) break;
+          if (hasCT && hasMR) {
+            break;
+          }
         }
       }
     } else {
@@ -576,6 +833,18 @@ function WorkList({
   const rollingPageNumber = (pageNumber - 1) % rollingPageNumberMod;
   const offset = resultsPerPage * rollingPageNumber;
   const offsetAndTake = offset + resultsPerPage;
+  const selectedStudyInstanceUids = [selectedCTStudy, selectedMRStudy].filter(Boolean) as string[];
+
+  let fusionTargetStudyInstanceUid: string | null = null;
+  if (selectedStudyInstanceUids.length === 2) {
+    for (const study of sortedStudies) {
+      if (selectedStudyInstanceUids.includes(study.studyInstanceUid)) {
+        fusionTargetStudyInstanceUid = study.studyInstanceUid;
+        break;
+      }
+    }
+  }
+
   const tableDataSource = sortedStudies.map((study, key) => {
     const rowKey = key + 1;
     const isExpanded = expandedRows.some(k => k === rowKey);
@@ -624,6 +893,32 @@ function WorkList({
     const isChecked = isCheckboxChecked(studyInstanceUid, modalities);
     const checkboxEnabled = showCheckbox ? isCheckboxEnabled(studyInstanceUid, modalities) : false;
 
+    const showFusionButtonForThisRow =
+      fusionTargetStudyInstanceUid &&
+      fusionTargetStudyInstanceUid === studyInstanceUid &&
+      selectedCTStudy &&
+      selectedMRStudy;
+
+    const fusionButton = showFusionButtonForThisRow && (
+      <Button
+        type={ButtonEnums.type.primary}
+        size={ButtonEnums.size.medium}
+        onClick={handleFusionClick}
+        dataCY="fusion-button"
+        className="relative px-8 py-2"
+        disabled={isFusionLoading}
+      >
+        {isFusionLoading ? (
+          <span className="flex items-center gap-2">
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-solid border-white border-t-transparent"></span>
+            Loading...
+          </span>
+        ) : (
+          'Fusion'
+        )}
+      </Button>
+    );
+
     return {
       dataCY: `studyRow-${studyInstanceUid}`,
       clickableCY: studyInstanceUid,
@@ -634,6 +929,7 @@ function WorkList({
       isChecked,
       isCheckboxEnabled: checkboxEnabled,
       onCheckboxChange: () => handleStudySelection(studyInstanceUid, modalities),
+      fusionButton,
       modalities,
       row: [
         {
@@ -728,83 +1024,86 @@ function WorkList({
                   return isValidB - isValidA;
                 })
               : appConfig.loadedModes
-            ).filter(mode => {
+            )
+              .filter(mode => {
                 // Only show "Basic Viewer" and "Segmentation" buttons
                 const allowedModes = ['Basic Viewer', 'Segmentation'];
                 return mode.displayName && allowedModes.includes(mode.displayName);
-              }).map((mode, i) => {
-              if (mode.hide) {
-                // Hide this mode from display
-                return null;
-              }
-              const modalitiesToCheck = modalities.replaceAll('/', '\\');
+              })
+              .map((mode, i) => {
+                if (mode.hide) {
+                  // Hide this mode from display
+                  return null;
+                }
+                const modalitiesToCheck = modalities.replaceAll('/', '\\');
 
-              const { valid: isValidMode, description: invalidModeDescription } = mode.isValidMode({
-                modalities: modalitiesToCheck,
-                study,
-              });
-              if (isValidMode === null) {
-                // Hide this as a computed result.
-                return null;
-              }
+                const { valid: isValidMode, description: invalidModeDescription } =
+                  mode.isValidMode({
+                    modalities: modalitiesToCheck,
+                    study,
+                  });
+                if (isValidMode === null) {
+                  // Hide this as a computed result.
+                  return null;
+                }
 
-              // TODO: Modes need a default/target route? We mostly support a single one for now.
-              // We should also be using the route path, but currently are not
-              // mode.routeName
-              // mode.routes[x].path
-              // Don't specify default data source, and it should just be picked up... (this may not currently be the case)
-              // How do we know which params to pass? Today, it's just StudyInstanceUIDs and configUrl if exists
-              const query = new URLSearchParams();
-              if (filterValues.configUrl) {
-                query.append('configUrl', filterValues.configUrl);
-              }
-              query.append('StudyInstanceUIDs', studyInstanceUid);
-              preserveQueryParameters(query);
+                // TODO: Modes need a default/target route? We mostly support a single one for now.
+                // We should also be using the route path, but currently are not
+                // mode.routeName
+                // mode.routes[x].path
+                // Don't specify default data source, and it should just be picked up... (this may not currently be the case)
+                // How do we know which params to pass? Today, it's just StudyInstanceUIDs and configUrl if exists
+                const query = new URLSearchParams();
+                if (filterValues.configUrl) {
+                  query.append('configUrl', filterValues.configUrl);
+                }
+                query.append('StudyInstanceUIDs', studyInstanceUid);
+                preserveQueryParameters(query);
 
-              return (
-                mode.displayName && (
-                  <Link
-                    className={isValidMode ? '' : 'cursor-not-allowed'}
-                    key={i}
-                    to={`${mode.routeName}${dataPath || ''}?${query.toString()}`}
-                    onClick={event => {
-                      // In case any event bubbles up for an invalid mode, prevent the navigation.
-                      // For example, the event bubbles up when the icon embedded in the disabled button is clicked.
-                      if (!isValidMode) {
-                        event.preventDefault();
-                      }
-                    }}
-                    // to={`${mode.routeName}/dicomweb?StudyInstanceUIDs=${studyInstanceUid}`}
-                  >
-                    {/* TODO revisit the completely rounded style of buttons used for launching a mode from the worklist later */}
-                    <Button
-                      type={ButtonEnums.type.primary}
-                      size={ButtonEnums.size.smallTall}
-                      disabled={!isValidMode}
-                      startIconTooltip={
-                        !isValidMode ? (
-                          <div className="font-inter flex w-[206px] whitespace-normal text-left text-xs font-normal text-white">
-                            {invalidModeDescription}
-                          </div>
-                        ) : null
-                      }
-                      startIcon={
-                        isValidMode ? (
-                          <Icons.LaunchArrow className="!h-[20px] !w-[20px] text-black" />
-                        ) : (
-                          <Icons.LaunchInfo className="!h-[20px] !w-[20px] text-black" />
-                        )
-                      }
-                      onClick={() => {}}
-                      dataCY={`mode-${mode.routeName}-${studyInstanceUid}`}
-                      className={!isValidMode && 'bg-[#166b2b]'}
+                return (
+                  mode.displayName && (
+                    <Link
+                      className={isValidMode ? '' : 'cursor-not-allowed'}
+                      key={i}
+                      to={`${mode.routeName}${dataPath || ''}?${query.toString()}`}
+                      onClick={event => {
+                        // In case any event bubbles up for an invalid mode, prevent the navigation.
+                        // For example, the event bubbles up when the icon embedded in the disabled button is clicked.
+                        if (!isValidMode) {
+                          event.preventDefault();
+                        }
+                      }}
+                      // to={`${mode.routeName}/dicomweb?StudyInstanceUIDs=${studyInstanceUid}`}
                     >
-                      {mode.displayName}
-                    </Button>
-                  </Link>
-                )
-              );
-            })}
+                      {/* TODO revisit the completely rounded style of buttons used for launching a mode from the worklist later */}
+                      <Button
+                        type={ButtonEnums.type.primary}
+                        size={ButtonEnums.size.smallTall}
+                        disabled={!isValidMode}
+                        startIconTooltip={
+                          !isValidMode ? (
+                            <div className="font-inter flex w-[206px] whitespace-normal text-left text-xs font-normal text-white">
+                              {invalidModeDescription}
+                            </div>
+                          ) : null
+                        }
+                        startIcon={
+                          isValidMode ? (
+                            <Icons.LaunchArrow className="!h-[20px] !w-[20px] text-black" />
+                          ) : (
+                            <Icons.LaunchInfo className="!h-[20px] !w-[20px] text-black" />
+                          )
+                        }
+                        onClick={() => {}}
+                        dataCY={`mode-${mode.routeName}-${studyInstanceUid}`}
+                        className={!isValidMode && 'bg-[#166b2b]'}
+                      >
+                        {mode.displayName}
+                      </Button>
+                    </Link>
+                  )
+                );
+              })}
           </div>
         </StudyListExpandedRow>
       ),
@@ -924,19 +1223,6 @@ function WorkList({
           </div>
           {hasStudies ? (
             <div className="flex grow flex-col">
-              {selectedCTStudy && selectedMRStudy && (
-                <div className="container m-auto mb-4 flex justify-center">
-                  <Button
-                    type={ButtonEnums.type.primary}
-                    size={ButtonEnums.size.medium}
-                    onClick={handleFusionClick}
-                    dataCY="fusion-button"
-                    className="px-8 py-2"
-                  >
-                    Fusion
-                  </Button>
-                </div>
-              )}
               <StudyListTable
                 tableDataSource={tableDataSource.slice(offset, offsetAndTake)}
                 numOfStudies={numOfStudies}
@@ -1050,7 +1336,5 @@ function _sortStringDates(s1, s2, sortModifier) {
     return -1 * sortModifier;
   }
 }
-
-
 
 export default WorkList;

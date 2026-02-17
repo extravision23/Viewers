@@ -26,12 +26,18 @@ function OHIFCornerstoneSEGViewport(props: withAppTypes) {
 
   const toolGroupId = `${SEG_TOOLGROUP_BASE_NAME}-${viewportId}`;
 
-  // SEG viewport will always have a single display set
-  if (displaySets.length > 1) {
-    throw new Error('SEG viewport should only have a single display set');
-  }
+  // Historically the SEG viewport expected exactly one SEG display set.
+  // In practice, additional non‑SEG display sets (e.g. the referenced series)
+  // may be attached to this viewport by hydration commands. For rendering and
+  // tooling we only care about the SEG overlay display set, so pick it from
+  // the list and ignore the rest.
+  const segDisplaySet =
+    displaySets.find(ds => ds.Modality === 'SEG' || (ds as any).isOverlayDisplaySet) ??
+    displaySets[0];
 
-  const segDisplaySet = displaySets[0];
+  if (!segDisplaySet) {
+    throw new Error('SEG viewport requires at least one display set');
+  }
   const [viewportGrid, viewportGridService] = useViewportGrid();
 
   // States
@@ -132,6 +138,28 @@ function OHIFCornerstoneSEGViewport(props: withAppTypes) {
           displaySet: segDisplaySet,
           viewportId,
         });
+
+        // Ensure that a segmentation representation exists on this viewport and
+        // mark it as active so that segmentation tools become available even if
+        // hanging‑protocol matching did not automatically attach it.
+        const segmentationId = segDisplaySet.displaySetInstanceUID;
+
+        const existingRepresentations = segmentationService.getSegmentationRepresentations(
+          viewportId,
+          {
+            segmentationId,
+            type: SegmentationRepresentations.Labelmap,
+          }
+        );
+
+        if (!existingRepresentations.length) {
+          await segmentationService.addSegmentationRepresentation(viewportId, {
+            segmentationId,
+            type: SegmentationRepresentations.Labelmap,
+          });
+        }
+
+        segmentationService.setActiveSegmentation(viewportId, segmentationId);
 
         return true;
       },

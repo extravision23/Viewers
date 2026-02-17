@@ -32,6 +32,7 @@ StudyListTable.propTypes = {
     PropTypes.shape({
       row: PropTypes.array.isRequired,
       expandedContent: PropTypes.node.isRequired,
+      fusionButton: PropTypes.node,
       querying: PropTypes.bool,
       onClickRow: PropTypes.func.isRequired,
       isExpanded: PropTypes.bool.isRequired,

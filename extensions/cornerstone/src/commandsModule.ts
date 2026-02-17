@@ -467,10 +467,8 @@ function commandsModule({
       let segmentationType: csToolsEnums.SegmentationRepresentations | undefined;
 
       if (displaySet.isOverlayDisplaySet) {
-        // update the previously stored segmentationPresentation with the new viewportId
-        // presentation so that when we put the referencedDisplaySet back in the viewport
-        // it will have the correct segmentation representation hydrated
-
+        // Determine the segmentation representation type; actual stored presentation
+        // will be set after we decide the target display set (for fusion cases).
         segmentationType =
           // Todo: check if PMAP modality should be handled such as SEG
           displaySet.Modality !== 'SEG'
@@ -478,11 +476,6 @@ function commandsModule({
             : viewport.type === CoreEnums.ViewportType.VOLUME_3D
               ? SegmentationRepresentations.Surface
               : SegmentationRepresentations.Labelmap;
-
-        commandsManager.runCommand('updateStoredSegmentationPresentation', {
-          displaySet,
-          type: segmentationType,
-        });
       }
 
       const referencedDisplaySetInstanceUID = displaySet.referencedDisplaySetInstanceUID;
@@ -507,6 +500,17 @@ function commandsModule({
             'hydrateSecondaryDisplaySet: referenced display set not found for segmentation'
           );
           return;
+        }
+
+        if (displaySet.Modality === 'SEG') {
+          try {
+            await commandsManager.runCommand('hydrateSegmentationFromDisplaySet', {
+              segDisplaySet: displaySet,
+              viewportId,
+            });
+          } catch (error) {
+            console.warn('Failed to hydrate segmentation from SEG display set', error);
+          }
         }
 
         // Try to use the series that was active in the viewport at the moment of
@@ -565,6 +569,44 @@ function commandsModule({
           }
         }
 
+        if (segmentationType != null) {
+          const { addSegmentationPresentationItem, segmentationPresentationStore, getSegmentationPresentationId } =
+            useSegmentationPresentationStore.getState();
+          const { viewports, isHangingProtocolLayout } = viewportGridService.getState();
+
+          // Store segmentation presentation keyed by each viewport's actual presentation id.
+          viewports.forEach(vp => {
+            const displaySetUIDs = vp.displaySetInstanceUIDs || [];
+            if (!displaySetUIDs.includes(targetDisplaySet.displaySetInstanceUID)) {
+              return;
+            }
+
+            const presentationId = getSegmentationPresentationId({
+              viewport: vp,
+              servicesManager,
+            });
+
+            if (!presentationId) {
+              return;
+            }
+
+            const existing = segmentationPresentationStore[presentationId] || [];
+            const alreadyStored = existing.some(
+              item => item.segmentationId === displaySet.displaySetInstanceUID && item.type === segmentationType
+            );
+
+            if (alreadyStored) {
+              return;
+            }
+
+            addSegmentationPresentationItem(presentationId, {
+              segmentationId: displaySet.displaySetInstanceUID,
+              hydrated: true,
+              type: segmentationType,
+            });
+          });
+        }
+
         storePositionPresentation(targetDisplaySet);
 
         // Preserve existing non‑segmentation layers (e.g. MR overlay) when
@@ -586,6 +628,59 @@ function commandsModule({
           displaySetInstanceUIDs: nextDisplaySetUIDs,
         });
 
+        // Ensure the segmentation representation is attached to viewports that
+        // contain the target (primary) display set. This avoids relying solely
+        // on presentation re-application, which may not run if viewports don't
+        // refresh after hydration.
+        try {
+          const { viewports } = viewportGridService.getState();
+          const segmentationId = displaySet.displaySetInstanceUID;
+
+          viewports.forEach((vp, vpId) => {
+            const displaySetUIDs = vp.displaySetInstanceUIDs || [];
+            if (!displaySetUIDs.includes(targetDisplaySet.displaySetInstanceUID)) {
+              return;
+            }
+
+            const isSegOnlyViewport =
+              displaySetUIDs.length > 0 &&
+              displaySetUIDs.every(uid => displaySetService.getDisplaySetByUID(uid)?.Modality === 'SEG');
+
+            if (isSegOnlyViewport) {
+              return;
+            }
+
+            const csViewport = cornerstoneViewportService.getCornerstoneViewport(vpId);
+            if (!csViewport) {
+              return;
+            }
+
+            const repType =
+              segmentationType ??
+              (csViewport.type === CoreEnums.ViewportType.VOLUME_3D
+                ? SegmentationRepresentations.Surface
+                : SegmentationRepresentations.Labelmap);
+
+            const existing = segmentationService.getSegmentationRepresentations(vpId, {
+              segmentationId,
+              type: repType,
+            });
+
+            if (!existing.length) {
+              segmentationService.addSegmentationRepresentation(vpId, {
+                segmentationId,
+                type: repType,
+              });
+            }
+
+            if (vpId === viewportId) {
+              segmentationService.setActiveSegmentation(vpId, segmentationId);
+            }
+          });
+        } catch (error) {
+          console.warn('Failed to ensure segmentation representations after hydration', error);
+        }
+
         // If we explicitly chose to show the segmentation on a different (but
         // geometrically compatible) series than the one referenced by the SEG,
         // ensure that a segmentation representation is attached to this viewport.
@@ -604,6 +699,46 @@ function commandsModule({
               error
             );
           }
+        }
+
+        // Ensure segmentation representations exist for SEG on all viewports
+        // that include the target display set (e.g., MPR viewports).
+        if (displaySet.Modality === 'SEG') {
+          const segmentationId = displaySet.displaySetInstanceUID;
+          const { viewports } = viewportGridService.getState();
+
+          viewports.forEach((vp, vpId) => {
+            const displaySetUIDs = vp.displaySetInstanceUIDs || [];
+            if (!displaySetUIDs.includes(targetDisplaySet.displaySetInstanceUID)) {
+              return;
+            }
+
+            const csViewport = cornerstoneViewportService.getCornerstoneViewport(vpId);
+            if (!csViewport) {
+              return;
+            }
+
+            const repType =
+              csViewport.type === CoreEnums.ViewportType.VOLUME_3D
+                ? SegmentationRepresentations.Surface
+                : SegmentationRepresentations.Labelmap;
+
+            const existing = segmentationService.getSegmentationRepresentations(vpId, {
+              segmentationId,
+              type: repType,
+            });
+
+            if (!existing.length) {
+              segmentationService.addSegmentationRepresentation(vpId, {
+                segmentationId,
+                type: repType,
+              });
+            }
+
+            if (vpId === viewportId) {
+              segmentationService.setActiveSegmentation(vpId, segmentationId);
+            }
+          });
         }
 
         const disableEditing = customizationService.getCustomization(
@@ -762,11 +897,17 @@ function commandsModule({
 
       commandsManager.run(options, optionsToUse);
     },
-    updateStoredSegmentationPresentation: ({ displaySet, type }) => {
+    updateStoredSegmentationPresentation: ({ displaySet, type, referencedDisplaySetInstanceUID }) => {
       const { addSegmentationPresentationItem } = useSegmentationPresentationStore.getState();
 
-      const referencedDisplaySetInstanceUID = displaySet.referencedDisplaySetInstanceUID;
-      addSegmentationPresentationItem(referencedDisplaySetInstanceUID, {
+      const resolvedReferencedDisplaySetInstanceUID =
+        referencedDisplaySetInstanceUID ?? displaySet.referencedDisplaySetInstanceUID;
+      console.debug('[SegPresentation] updateStoredSegmentationPresentation', {
+        segmentationId: displaySet.displaySetInstanceUID,
+        referencedDisplaySetInstanceUID: resolvedReferencedDisplaySetInstanceUID,
+        type,
+      });
+      addSegmentationPresentationItem(resolvedReferencedDisplaySetInstanceUID, {
         segmentationId: displaySet.displaySetInstanceUID,
         hydrated: true,
         type,

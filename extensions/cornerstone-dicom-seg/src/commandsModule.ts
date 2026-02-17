@@ -868,6 +868,72 @@ const commandsModule = ({
       }
     },
 
+    totalSpineSegmentator: async ({
+      studyInstanceUID,
+      seriesInstanceUID,
+      taskName,
+      dataSource,
+      viewportId,
+    }) => {
+      try {
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
+
+        if (!config?.pythonFunctionName) {
+          throw new Error('Missing pythonFunctionName in data source config.');
+        }
+
+        const url = buildFunctionUrl(config, 'TotalSpineSegmentator');
+        let segmentationSeriesInstanceUID;
+        try {
+          const result = await getActiveSegmentationSeriesForServerCall({
+            viewportId,
+            servicesManager,
+            extensionManager,
+            storeSegmentationAction: params => actions.storeSegmentation(params),
+          });
+          segmentationSeriesInstanceUID = result.segmentationSeriesInstanceUID;
+        } catch (error) {
+          if (error instanceof UserCancelledError) {
+            console.log('User cancelled segmentation save, aborting server call');
+            return null;
+          }
+          throw error;
+        }
+
+        // Build payload with studyId, seriesId, and taskName
+        const payload: any = {
+          studyId: studyInstanceUID,
+          seriesId: seriesInstanceUID,
+          taskName,
+        };
+
+        // Add segmentationSeriesInstanceUID if available
+        if (segmentationSeriesInstanceUID) {
+          payload.segmentationSeriesInstanceUID = segmentationSeriesInstanceUID;
+        }
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader(defaultDataSource),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(`Status ${response.status}${text ? `: ${text}` : ''}`);
+        }
+
+        return { success: true };
+      } catch (e) {
+        console.error('Error in totalSpineSegmentator:', e);
+        throw e;
+      }
+    },
+
     /**
      * Helper: Check if a segmentation is saved (has SeriesInstanceUID and is not madeInClient)
      * @param segmentationId - The segmentation ID to check
