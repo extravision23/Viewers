@@ -11,6 +11,7 @@ import MeasurementTable from './MeasurementTable.json';
 import DataRow from './DataRow.json';
 import Modes from './Modes.json';
 import SegmentationPanel from './SegmentationPanel.json';
+import Segmentation from './Segmentation.json';
 import SidePanel from './SidePanel.json';
 import StudyBrowser from './StudyBrowser.json';
 import StudyItem from './StudyItem.json';
@@ -47,6 +48,7 @@ export default {
     DataRow,
     Modes,
     SegmentationPanel,
+    Segmentation,
     SidePanel,
     StudyBrowser,
     StudyItem,

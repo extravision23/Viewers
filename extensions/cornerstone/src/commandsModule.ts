@@ -476,6 +476,7 @@ function commandsModule({
             : viewport.type === CoreEnums.ViewportType.VOLUME_3D
               ? SegmentationRepresentations.Surface
               : SegmentationRepresentations.Labelmap;
+
       }
 
       const referencedDisplaySetInstanceUID = displaySet.referencedDisplaySetInstanceUID;
@@ -501,6 +502,7 @@ function commandsModule({
           );
           return;
         }
+
 
         if (displaySet.Modality === 'SEG') {
           try {
@@ -569,6 +571,7 @@ function commandsModule({
           }
         }
 
+
         if (segmentationType != null) {
           const { addSegmentationPresentationItem, segmentationPresentationStore, getSegmentationPresentationId } =
             useSegmentationPresentationStore.getState();
@@ -605,6 +608,7 @@ function commandsModule({
               type: segmentationType,
             });
           });
+
         }
 
         storePositionPresentation(targetDisplaySet);
@@ -627,6 +631,7 @@ function commandsModule({
           viewportId,
           displaySetInstanceUIDs: nextDisplaySetUIDs,
         });
+
 
         // Ensure the segmentation representation is attached to viewports that
         // contain the target (primary) display set. This avoids relying solely
@@ -902,11 +907,6 @@ function commandsModule({
 
       const resolvedReferencedDisplaySetInstanceUID =
         referencedDisplaySetInstanceUID ?? displaySet.referencedDisplaySetInstanceUID;
-      console.debug('[SegPresentation] updateStoredSegmentationPresentation', {
-        segmentationId: displaySet.displaySetInstanceUID,
-        referencedDisplaySetInstanceUID: resolvedReferencedDisplaySetInstanceUID,
-        type,
-      });
       addSegmentationPresentationItem(resolvedReferencedDisplaySetInstanceUID, {
         segmentationId: displaySet.displaySetInstanceUID,
         hydrated: true,
@@ -2506,9 +2506,16 @@ function commandsModule({
           new Set([...(existingUIDs || []), ...(viewport.displaySetInstanceUIDs || [])])
         );
 
+        // Do not include SEG/RTSTRUCT display sets in non-SEG viewports.
+        // Segmentations are rendered via segmentation representations, not as display sets.
+        const filteredUIDs = mergedUIDs.filter(uid => {
+          const ds = displaySetService.getDisplaySetByUID(uid);
+          return ds?.Modality !== 'SEG' && ds?.Modality !== 'RTSTRUCT';
+        });
+
         return {
           viewportId: viewport.viewportId,
-          displaySetInstanceUIDs: mergedUIDs,
+          displaySetInstanceUIDs: filteredUIDs.length ? filteredUIDs : mergedUIDs,
         };
       });
 
@@ -2535,6 +2542,38 @@ function commandsModule({
 
       viewport.setOrientation(orientation);
       viewport.render();
+
+      // Debug logging for MPR geometry
+      try {
+        const isMpr =
+          typeof viewportId === 'string' &&
+          viewportId.toLowerCase().includes('mpr');
+        if (isMpr) {
+          const camera = viewport.getCamera();
+          const volumeIds = viewport.getAllVolumeIds?.() || [];
+          const volume = volumeIds.length ? cache.getVolume(volumeIds[0]) : null;
+          const imageData = volume?.imageData;
+          const spacing = imageData?.getSpacing?.();
+          const direction = imageData?.getDirection?.();
+          const origin = imageData?.getOrigin?.();
+          const dimensions = imageData?.getDimensions?.();
+          const spacingInNormal = volume
+            ? csUtils.getSpacingInNormalDirection(volume, camera.viewPlaneNormal)
+            : undefined;
+          console.info('[MPR DEBUG] orientation set', {
+            viewportId,
+            orientation,
+            spacing,
+            direction,
+            origin,
+            dimensions,
+            camera,
+            spacingInNormal,
+          });
+        }
+      } catch (error) {
+        console.warn('[MPR DEBUG] logging failed', error);
+      }
 
       // update the orientation in the viewport info
       const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);

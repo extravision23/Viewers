@@ -1,4 +1,5 @@
 import { Types, DicomMetadataStore } from '@ohif/core';
+import { buildFunctionUrl } from '@ohif/app/src/utils/buildFunctionUrl';
 
 import { ContextMenuController } from './CustomizableContextMenu';
 import DicomTagBrowser from './DicomTagBrowser/DicomTagBrowser';
@@ -24,6 +25,7 @@ import { useViewportsByPositionStore } from './stores/useViewportsByPositionStor
 import { useToggleOneUpViewportGridStore } from './stores/useToggleOneUpViewportGridStore';
 import requestDisplaySetCreationForStudy from './Panels/requestDisplaySetCreationForStudy';
 import promptSaveReport from './utils/promptSaveReport';
+import { isMprInFlight, setMprInFlight } from './utils/mprDeriveState';
 
 export type HangingProtocolParams = {
   protocolId?: string;
@@ -55,6 +57,11 @@ const commandsModule = ({
 
   // Define a context menu controller for use with any context menus
   const contextMenuController = new ContextMenuController(servicesManager, commandsManager);
+
+  const getAuthHeader = dataSource => {
+    const bearer = dataSource?.retrieve?.customClient?.headers?.Authorization;
+    return bearer ? { Authorization: bearer } : {};
+  };
 
   const actions = {
     /**
@@ -192,6 +199,109 @@ const commandsModule = ({
       commandsManager.run('setDisplaySetsForViewports', {
         viewportsToUpdate: updatedViewports,
       });
+    },
+    mprDerive: async ({ displaySetInstanceUID, plane }) => {
+      const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+      if (!displaySet) {
+        uiNotificationService.show({
+          title: 'MPR',
+          message: 'Display set not found.',
+          type: 'error',
+          duration: 3000,
+        });
+        return;
+      }
+
+      const seriesInstanceUID = displaySet.SeriesInstanceUID;
+      const studyInstanceUID = displaySet.StudyInstanceUID;
+      const planeNormalized = String(plane || '').toLowerCase();
+
+      if (!seriesInstanceUID || !studyInstanceUID || !planeNormalized) {
+        uiNotificationService.show({
+          title: 'MPR',
+          message: 'Missing series or plane.',
+          type: 'error',
+          duration: 3000,
+        });
+        return;
+      }
+
+      if (isMprInFlight(seriesInstanceUID)) {
+        uiNotificationService.show({
+          title: 'MPR',
+          message: 'MPR already running for this series.',
+          type: 'info',
+          duration: 3000,
+        });
+        return;
+      }
+
+      const dataSource = extensionManager.getActiveDataSource()[0];
+      const config = dataSource?.getConfig?.();
+
+      if (!config) {
+        uiNotificationService.show({
+          title: 'MPR',
+          message: 'No data source configuration found.',
+          type: 'error',
+          duration: 3000,
+        });
+        return;
+      }
+
+      setMprInFlight(seriesInstanceUID, planeNormalized, true);
+      uiNotificationService.show({
+        title: 'MPR',
+        message: 'MPR started.',
+        type: 'info',
+        duration: 3000,
+      });
+
+      try {
+        const url = buildFunctionUrl(config, 'MPRDerive');
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader(dataSource),
+          },
+          body: JSON.stringify({
+            studyInstanceUID,
+            seriesInstanceUID,
+            plane: planeNormalized,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(errorText || `HTTP ${response.status}`);
+        }
+
+        try {
+          await dataSource.retrieve.series.metadata({
+            StudyInstanceUID: studyInstanceUID,
+          });
+        } catch (refreshError) {
+          console.warn('Failed to refresh display sets after MPR:', refreshError);
+        }
+
+        uiNotificationService.show({
+          title: 'MPR',
+          message: `MPR ${planeNormalized} completed.`,
+          type: 'success',
+          duration: 3000,
+        });
+      } catch (error) {
+        console.warn('MPRDerive failed', error);
+        uiNotificationService.show({
+          title: 'MPR',
+          message: `MPR ${planeNormalized} failed.`,
+          type: 'error',
+          duration: 4000,
+        });
+      } finally {
+        setMprInFlight(seriesInstanceUID, planeNormalized, false);
+      }
     },
     /**
      * Runs a command in multi-monitor mode.  No-op if not multi-monitor.
@@ -789,6 +899,7 @@ const commandsModule = ({
     scrollActiveThumbnailIntoView: actions.scrollActiveThumbnailIntoView,
     addDisplaySetAsLayer: actions.addDisplaySetAsLayer,
     removeDisplaySetLayer: actions.removeDisplaySetLayer,
+    mprDerive: actions.mprDerive,
   };
 
   return {

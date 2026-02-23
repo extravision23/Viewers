@@ -1450,9 +1450,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     segmentationPresentation: SegmentationPresentation
   ): void {
     if (!segmentationPresentation) {
-      console.debug('[SegPresentation] no segmentationPresentation for viewport', {
-        viewportId: viewport?.id,
-      });
       return;
     }
 
@@ -1460,11 +1457,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     const viewportInfo = this.getViewportInfo(viewport.id);
     const viewportOptions = viewportInfo?.getViewportOptions();
     const shouldHideVolume = viewportOptions?.customViewportProps?.hideVolume;
-
-    console.debug('[SegPresentation] apply segmentationPresentation', {
-      viewportId: viewport.id,
-      items: segmentationPresentation,
-    });
 
     segmentationPresentation.forEach((presentationItem: SegmentationPresentationItem) => {
       const { segmentationId, type, hydrated } = presentationItem;
