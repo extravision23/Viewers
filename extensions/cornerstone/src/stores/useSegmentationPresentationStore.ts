@@ -166,13 +166,6 @@ const _getSegmentationPresentationId = ({
     ...(primaryDisplaySetUIDs.length ? primaryDisplaySetUIDs : displaySetInstanceUIDs)
   );
 
-  console.debug('[SegPresentation] getSegmentationPresentationId', {
-    viewportId: viewport?.viewportOptions?.viewportId,
-    displaySetInstanceUIDs,
-    primaryDisplaySetUIDs,
-    presentationId: segmentationPresentationArr.join(JOIN_STR),
-  });
-
   // Uncomment if unique indexing is needed
   // addUniqueIndex(
   //   segmentationPresentationArr,

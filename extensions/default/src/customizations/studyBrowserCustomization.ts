@@ -1,6 +1,29 @@
 import { utils } from '@ohif/core';
 import i18n from '@ohif/i18n';
+import { isMprInFlight } from '../utils/mprDeriveState';
 const { formatDate } = utils;
+
+const isEligibleForMpr = displaySet => {
+  if (!displaySet) {
+    return false;
+  }
+
+  const modality = displaySet.Modality;
+  if (modality !== 'CT' && modality !== 'MR') {
+    return false;
+  }
+
+  const seriesDescription = String(displaySet.SeriesDescription || '').toLowerCase();
+  const imageType = Array.isArray(displaySet.ImageType)
+    ? displaySet.ImageType.map(v => String(v).toLowerCase())
+    : [];
+
+  const isDerived =
+    imageType.includes('derived') || seriesDescription.includes('(derived)') || seriesDescription.includes('derived');
+  const isMprDerived = isDerived && seriesDescription.includes('mpr');
+
+  return !isMprDerived;
+};
 
 export default {
   'studyBrowser.studyMenuItems': [],
@@ -16,6 +39,36 @@ export default {
       label: i18n.t('StudyBrowser:Add as Layer'),
       iconName: 'ViewportViews',
       commands: 'addDisplaySetAsLayer',
+    },
+    {
+      id: 'mprCoronal',
+      label: 'MPR Coronal',
+      iconName: 'ViewportViews',
+      commands: 'mprDerive',
+      commandOptions: { plane: 'coronal' },
+      selector: ({ servicesManager, displaySetInstanceUID }) => {
+        const { displaySetService } = servicesManager.services;
+        const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+        if (!isEligibleForMpr(displaySet)) {
+          return false;
+        }
+        return !isMprInFlight(displaySet?.SeriesInstanceUID);
+      },
+    },
+    {
+      id: 'mprSagittal',
+      label: 'MPR Sagittal',
+      iconName: 'ViewportViews',
+      commands: 'mprDerive',
+      commandOptions: { plane: 'sagittal' },
+      selector: ({ servicesManager, displaySetInstanceUID }) => {
+        const { displaySetService } = servicesManager.services;
+        const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+        if (!isEligibleForMpr(displaySet)) {
+          return false;
+        }
+        return !isMprInFlight(displaySet?.SeriesInstanceUID);
+      },
     },
     {
       id: 'deleteSegmentation',

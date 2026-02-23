@@ -215,6 +215,24 @@ export function useViewportRendering(
       return;
     }
 
+    // Debug: log active display set metadata for MPR
+    try {
+      const viewportIdLower = (viewportId || '').toString().toLowerCase();
+      const isMpr = viewportIdLower.includes('mpr');
+      if (isMpr) {
+        console.info('[MPR DEBUG] displaySet', {
+          viewportId,
+          displaySetInstanceUID: selectedDisplaySet.displaySetInstanceUID,
+          seriesInstanceUID: selectedDisplaySet.SeriesInstanceUID,
+          numInstances: selectedDisplaySet.numInstances,
+          modality: selectedDisplaySet.Modality,
+          seriesDescription: selectedDisplaySet.SeriesDescription,
+        });
+      }
+    } catch (error) {
+      console.warn('[MPR DEBUG] displaySet logging failed', error);
+    }
+
     if (!viewport) {
       return;
     }
@@ -235,6 +253,48 @@ export function useViewportRendering(
 
     if (!imageData) {
       return;
+    }
+
+    // Debug: log MPR geometry for volume viewports
+    try {
+      const viewportIdLower = (viewportId || '').toString().toLowerCase();
+      const isMpr = viewportIdLower.includes('mpr');
+      if (isMpr) {
+        const imageDataVtk = imageData.imageData;
+        const spacing = imageDataVtk.getSpacing?.();
+        const direction = imageDataVtk.getDirection?.();
+        const origin = imageDataVtk.getOrigin?.();
+        const dimensions = imageDataVtk.getDimensions?.();
+        const camera = viewport.getCamera?.();
+        const spacingInNormal =
+          camera?.viewPlaneNormal && imageDataVtk
+            ? utilities.getSpacingInNormalDirection(
+                { direction: imageDataVtk.getDirection(), spacing: imageDataVtk.getSpacing() },
+                camera.viewPlaneNormal
+              )
+            : undefined;
+        console.info('[MPR DEBUG] viewport', {
+          viewportId,
+          volumeId,
+          spacing,
+          direction,
+          origin,
+          dimensions,
+          camera: camera
+            ? {
+                viewPlaneNormal: camera.viewPlaneNormal,
+                viewUp: camera.viewUp,
+                viewRight: camera.viewRight,
+                position: camera.position,
+                focalPoint: camera.focalPoint,
+                parallelScale: camera.parallelScale,
+              }
+            : camera,
+          spacingInNormal,
+        });
+      }
+    } catch (error) {
+      console.warn('[MPR DEBUG] logging failed', error);
     }
 
     const imageDataVtk = imageData.imageData;

@@ -16,7 +16,7 @@ export default {
       const { item: subItem } = subProps;
 
       // Regular menu item
-      const isDisabled = subItem.selector && !subItem.selector({ servicesManager });
+      const isDisabled = subItem.selector && !subItem.selector({ servicesManager, ...rest });
 
       return (
         <DropdownMenuItem
