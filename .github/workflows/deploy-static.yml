@@ -1,0 +1,90 @@
+name: Deploy OHIF static site to Azure Storage ($web)
+
+on:
+  push:
+    branches: [develop, production]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build
+        run: yarn build
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Pick target storage account by branch
+        id: target
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
+            echo "account=extravisionohif" >> $GITHUB_OUTPUT
+          elif [ "${GITHUB_REF_NAME}" = "production" ]; then
+            echo "account=stdicomdata" >> $GITHUB_OUTPUT
+          else
+            echo "Unsupported branch: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+      - name: Clean $web except app-config.js
+        run: |
+          set -euo pipefail
+          ACCOUNT="${{ steps.target.outputs.account }}"
+          CONTAINER='$web'
+
+          az storage blob list \
+            --account-name "$ACCOUNT" \
+            --container-name "$CONTAINER" \
+            --auth-mode login \
+            --query "[?name!='app-config.js'].name" -o tsv \
+          | while IFS= read -r blob; do
+              if [ -n "$blob" ]; then
+                echo "Deleting: $blob"
+                az storage blob delete \
+                  --account-name "$ACCOUNT" \
+                  --container-name "$CONTAINER" \
+                  --name "$blob" \
+                  --auth-mode login
+              fi
+            done
+
+      - name: Deploy dist to $web (do not overwrite app-config.js)
+        run: |
+          set -euo pipefail
+          ACCOUNT="${{ steps.target.outputs.account }}"
+
+          # Не даємо випадково перезаписати app-config.js
+          rm -f platform/app/dist/app-config.js
+
+          az storage blob upload-batch \
+            --account-name "$ACCOUNT" \
+            --destination '$web' \
+            --source "platform/app/dist" \
+            --overwrite true \
+            --auth-mode login
