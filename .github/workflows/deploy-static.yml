@@ -52,27 +52,44 @@ jobs:
             exit 1
           fi
 
-      - name: Clean $web except app-config.js
+      - name: Clean $web except app-config.js (handle directory markers)
         run: |
           set -euo pipefail
           ACCOUNT="${{ steps.target.outputs.account }}"
           CONTAINER='$web'
           
-          # Беремо тільки реальні blob-и, не "директорії"
+          # 1) Видаляємо все, крім app-config.js, АЛЕ пропускаємо "folder markers" без слеша
+          # (assets, static, etc.) — видалимо їх після того, як вичистимо їхній вміст.
           az storage blob list \
             --account-name "$ACCOUNT" \
             --container-name "$CONTAINER" \
             --auth-mode login \
-            --query "[?properties.blobType != null && name!='app-config.js'].name" -o tsv \
+            --query "[?name!='app-config.js' && contains(name,'/')].name" -o tsv \
           | while IFS= read -r blob; do
-              if [ -n "$blob" ]; then
-                echo "Deleting blob: $blob"
-                az storage blob delete \
-                  --account-name "$ACCOUNT" \
-                  --container-name "$CONTAINER" \
-                  --name "$blob" \
-                  --auth-mode login
-              fi
+              [ -z "$blob" ] && continue
+              echo "Deleting blob: $blob"
+              az storage blob delete \
+                --account-name "$ACCOUNT" \
+                --container-name "$CONTAINER" \
+                --name "$blob" \
+                --auth-mode login
+            done
+          
+          # 2) Тепер видаляємо верхньорівневі файли (без /), крім app-config.js
+          # і крім "folder markers", які Azure може вважати директорією.
+          az storage blob list \
+            --account-name "$ACCOUNT" \
+            --container-name "$CONTAINER" \
+            --auth-mode login \
+            --query "[?name!='app-config.js' && !contains(name,'/')].name" -o tsv \
+          | while IFS= read -r blob; do
+              [ -z "$blob" ] && continue
+              echo "Deleting top-level blob: $blob"
+              az storage blob delete \
+                --account-name "$ACCOUNT" \
+                --container-name "$CONTAINER" \
+                --name "$blob" \
+                --auth-mode login || true
             done
 
       - name: Deploy dist to $web (do not overwrite app-config.js)
