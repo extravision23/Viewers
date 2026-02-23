@@ -57,15 +57,16 @@ jobs:
           set -euo pipefail
           ACCOUNT="${{ steps.target.outputs.account }}"
           CONTAINER='$web'
-
+          
+          # Беремо тільки реальні blob-и, не "директорії"
           az storage blob list \
             --account-name "$ACCOUNT" \
             --container-name "$CONTAINER" \
             --auth-mode login \
-            --query "[?name!='app-config.js'].name" -o tsv \
+            --query "[?properties.blobType != null && name!='app-config.js'].name" -o tsv \
           | while IFS= read -r blob; do
               if [ -n "$blob" ]; then
-                echo "Deleting: $blob"
+                echo "Deleting blob: $blob"
                 az storage blob delete \
                   --account-name "$ACCOUNT" \
                   --container-name "$CONTAINER" \
