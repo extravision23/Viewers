@@ -163,6 +163,13 @@ export const toolbarButtons: Button[] = [
   },
   // sections
   {
+    id: 'MeasurementTools',
+    uiType: 'ohif.toolButtonList',
+    props: {
+      buttonSection: true,
+    },
+  },
+  {
     id: 'MoreTools',
     uiType: 'ohif.toolButtonList',
     props: {
@@ -413,6 +420,105 @@ export const toolbarButtons: Button[] = [
       label: i18n.t('Buttons:Dicom Tag Browser'),
       tooltip: i18n.t('Buttons:Dicom Tag Browser'),
       commands: 'openDICOMTagViewer',
+    },
+  },
+  {
+    id: 'Length',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-length',
+      label: i18n.t('Buttons:Length'),
+      tooltip: i18n.t('Buttons:Length Tool'),
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'Bidirectional',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-bidirectional',
+      label: i18n.t('Buttons:Bidirectional'),
+      tooltip: i18n.t('Buttons:Bidirectional Tool'),
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'ArrowAnnotate',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-annotate',
+      label: i18n.t('Buttons:Annotation'),
+      tooltip: i18n.t('Buttons:Arrow Annotate'),
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'EllipticalROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-ellipse',
+      label: i18n.t('Buttons:Ellipse'),
+      tooltip: i18n.t('Buttons:Ellipse ROI'),
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'RectangleROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-rectangle',
+      label: i18n.t('Buttons:Rectangle'),
+      tooltip: i18n.t('Buttons:Rectangle ROI'),
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'CircleROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-circle',
+      label: i18n.t('Buttons:Circle'),
+      tooltip: i18n.t('Buttons:Circle Tool'),
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'PlanarFreehandROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-freehand-roi',
+      label: i18n.t('Buttons:Freehand ROI'),
+      tooltip: i18n.t('Buttons:Freehand ROI'),
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'SplineROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-spline-roi',
+      label: i18n.t('Buttons:Spline ROI'),
+      tooltip: i18n.t('Buttons:Spline ROI'),
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'LivewireContour',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-livewire',
+      label: i18n.t('Buttons:Livewire tool'),
+      tooltip: i18n.t('Buttons:Livewire tool'),
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
     },
   },
   {

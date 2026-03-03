@@ -679,6 +679,7 @@ const commandsModule = ({
       seriesInstanceUID,
       seed,
       options,
+      region,
       dataSource,
       viewportId,
     }) => {
@@ -716,6 +717,11 @@ const commandsModule = ({
         // Only include options if they are provided
         if (options && Object.keys(options).length > 0) {
           payload.options = options;
+        }
+
+        // Include region constraint if ROI was selected
+        if (region?.polygons?.length) {
+          payload.region = region;
         }
 
         const response = await fetch(endpoint, {

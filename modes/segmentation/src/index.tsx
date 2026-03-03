@@ -41,6 +41,7 @@ function modeFactory({ modeConfiguration }) {
       toolbarService.register(toolbarButtons);
 
       toolbarService.updateSection(toolbarService.sections.primary, [
+        'MeasurementTools',
         'WindowLevel',
         'Pan',
         'Zoom',
@@ -49,6 +50,18 @@ function modeFactory({ modeConfiguration }) {
         'Layout',
         'Crosshairs',
         'MoreTools',
+      ]);
+
+      toolbarService.updateSection('MeasurementTools', [
+        'Length',
+        'Bidirectional',
+        'ArrowAnnotate',
+        'EllipticalROI',
+        'RectangleROI',
+        'CircleROI',
+        'PlanarFreehandROI',
+        'SplineROI',
+        'LivewireContour',
       ]);
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topLeft, [
@@ -139,6 +152,25 @@ function modeFactory({ modeConfiguration }) {
       });
 
       _unsubscriptions.push(...unsubscribeAutoTabSwitchEvents);
+
+      // Activate Measurement panel when a measurement is added
+      _unsubscriptions.push(
+        ...panelService
+          .addActivatePanelTriggers(
+            cornerstone.measurements,
+            [
+              {
+                sourcePubSubService: measurementService,
+                sourceEvents: [
+                  measurementService.EVENTS.MEASUREMENT_ADDED,
+                  measurementService.EVENTS.RAW_MEASUREMENT_ADDED,
+                ],
+              },
+            ],
+            true
+          )
+          .map(sub => () => sub.unsubscribe())
+      );
     },
     onModeExit: ({ servicesManager }: withAppTypes) => {
       const {
@@ -205,6 +237,7 @@ function modeFactory({ modeConfiguration }) {
               leftPanels: [ohif.thumbnailList],
               leftPanelResizable: true,
               rightPanels: [
+                cornerstone.measurements,
                 cornerstone.labelMapSegmentationPanel,
                 cornerstone.contourSegmentationPanel,
                 cornerstone.segmentation, // Generic panel for all representation types (including Surface)
