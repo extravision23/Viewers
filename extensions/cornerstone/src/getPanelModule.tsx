@@ -55,7 +55,7 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
     const isLabelmap = props.segmentationRepresentationType === SegmentationRepresentations.Labelmap;
 
     return (
-      <>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <Toolbox
           buttonSectionId={toolSectionMap[props.segmentationRepresentationTypes?.[0]]}
           title={tValue}
@@ -96,7 +96,7 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
           }}
           segmentationRepresentationTypes={props?.segmentationRepresentationTypes}
         />
-      </>
+      </div>
     );
   };
 

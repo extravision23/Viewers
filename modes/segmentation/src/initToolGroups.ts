@@ -108,6 +108,31 @@ function createTools({ utilityModule, commandsManager }) {
       {
         toolName: toolNames.SegmentBidirectional,
       },
+      { toolName: toolNames.Length },
+      {
+        toolName: toolNames.ArrowAnnotate,
+        configuration: {
+          getTextCallback: (callback, eventDetails) => {
+            commandsManager.runCommand('arrowTextCallback', {
+              callback,
+              eventDetails,
+            });
+          },
+          changeTextCallback: (data, eventDetails, callback) => {
+            commandsManager.runCommand('arrowTextCallback', {
+              callback,
+              data,
+              eventDetails,
+            });
+          },
+        },
+      },
+      { toolName: toolNames.Bidirectional },
+      { toolName: toolNames.EllipticalROI },
+      { toolName: toolNames.CircleROI },
+      { toolName: toolNames.RectangleROI },
+      { toolName: toolNames.SplineROI },
+      { toolName: toolNames.LivewireContour },
       {
         toolName: toolNames.SegmentSelect,
       },

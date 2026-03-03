@@ -3,6 +3,7 @@ import { useSystem } from '@ohif/core';
 import { EVENTS, eventTarget, utilities, Enums, StackViewport } from '@cornerstonejs/core';
 import { Enums as csToolsEnums } from '@cornerstonejs/tools';
 import { vec3 } from 'gl-matrix';
+import { getRegionConstraintFromSelectedROI } from '../utils/roiToRegionConstraint';
 
 const cs3DToolsEvents = csToolsEnums.Events;
 
@@ -13,6 +14,7 @@ interface MagicWandOptions {
   connectivity?: 6 | 18 | 26;
   maxRegionVoxels?: number;
   maxRadiusVoxels?: number;
+  regionExtrudeSlices?: number;
 }
 
 interface SeedPoint {
@@ -40,6 +42,7 @@ export function useMagicWandSegmentation() {
     connectivity: 6,
     maxRegionVoxels: 500000,
     maxRadiusVoxels: 200,
+    regionExtrudeSlices: 10,
   });
 
   const clickHandlerRef = useRef<((evt: CustomEvent) => void) | null>(null);
@@ -236,11 +239,22 @@ export function useMagicWandSegmentation() {
       setError(null);
 
       try {
+        const region = getRegionConstraintFromSelectedROI(viewportId, seriesInstanceUID, {
+          cornerstoneViewportService,
+          displaySetService: displaySetService as any,
+        });
+
+        const opts = { ...options };
+        if (!region?.polygons?.length && opts.regionExtrudeSlices != null) {
+          delete opts.regionExtrudeSlices;
+        }
+
         const result = await commandsManager.runCommand('magicWandSegmentation', {
           studyInstanceUID,
           seriesInstanceUID,
           seed,
-          options: Object.keys(options).length > 0 ? options : undefined,
+          options: Object.keys(opts).length > 0 ? opts : undefined,
+          region: region ?? undefined,
           viewportId,
         });
 

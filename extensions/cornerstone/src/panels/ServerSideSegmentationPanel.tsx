@@ -4,6 +4,7 @@ import { useMagicWandSegmentation } from '../hooks/useMagicWandSegmentation';
 import { useModal } from '@ohif/ui-next';
 import TotalSegmentatorTaskModal from '../components/TotalSegmentatorTaskModal';
 import { buildFunctionUrl } from '@ohif/app/src/utils/buildFunctionUrl';
+import { getRegionConstraintFromSelectedROI } from '../utils/roiToRegionConstraint';
 
 type ServerSideSegmentationPanelProps = withAppTypes;
 
@@ -61,13 +62,40 @@ const PRESETS: CTPreset[] = [
 
 export default function ServerSideSegmentationPanel(props: ServerSideSegmentationPanelProps) {
   const { servicesManager, extensionManager, commandsManager } = useSystem();
-  const { uiNotificationService, segmentationService, displaySetService } = servicesManager.services;
+  const { uiNotificationService, segmentationService, displaySetService, viewportGridService, cornerstoneViewportService } = servicesManager.services;
   const { show, hide } = useModal();
 
   const { mode, error, seedMarker, options, setOptions, startPickingSeed } =
     useMagicWandSegmentation();
 
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [hasRegion, setHasRegion] = useState(false);
+
+  // Poll for selected ROI to enable Extrude Slices slider
+  useEffect(() => {
+    const check = () => {
+      const viewportId = viewportGridService.getActiveViewportId();
+      const { viewports } = viewportGridService.getState();
+      const viewport = viewports.get(viewportId);
+      if (!viewport?.displaySetInstanceUIDs?.length) {
+        setHasRegion(false);
+        return;
+      }
+      const displaySet = displaySetService.getDisplaySetByUID(viewport.displaySetInstanceUIDs[0]);
+      if (!displaySet?.SeriesInstanceUID) {
+        setHasRegion(false);
+        return;
+      }
+      const region = getRegionConstraintFromSelectedROI(viewportId, displaySet.SeriesInstanceUID, {
+        cornerstoneViewportService,
+        displaySetService: displaySetService as any,
+      });
+      setHasRegion(!!region?.polygons?.length);
+    };
+    check();
+    const id = setInterval(check, 1000);
+    return () => clearInterval(id);
+  }, [viewportGridService, displaySetService, cornerstoneViewportService]);
   const [isRunningOneClick, setIsRunningOneClick] = useState(false);
   const [isRunningByPreset, setIsRunningByPreset] = useState(false);
   const [isRunningTotalSegmentator, setIsRunningTotalSegmentator] = useState(false);
@@ -741,6 +769,12 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
           </div>
         )}
 
+        {mode !== 'pickingSeed' && mode !== 'loading' && (
+          <div className="mt-1 text-xs text-gray-500">
+            Tip: Select an ROI (Ellipse, Rectangle, Freehand) first to limit Magic Wand to that region
+          </div>
+        )}
+
         {error && <div className="rounded bg-red-900/30 p-2 text-sm text-red-300">{error}</div>}
 
         <div className="border-t border-gray-700 pt-3">
@@ -819,6 +853,30 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
                   className="w-full rounded border border-gray-600 bg-gray-800 p-1 text-white"
                   placeholder="200"
                 />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm text-gray-300">
+                  Extrude Slices
+                  {!hasRegion && (
+                    <span className="ml-1 text-xs text-gray-500">(select ROI first)</span>
+                  )}
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="50"
+                  value={options.regionExtrudeSlices ?? 10}
+                  onChange={e =>
+                    setOptions({
+                      ...options,
+                      regionExtrudeSlices: parseInt(e.target.value) || 10,
+                    })
+                  }
+                  disabled={!hasRegion}
+                  className="w-full disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <span className="text-xs text-gray-400">{options.regionExtrudeSlices ?? 10}</span>
               </div>
             </div>
           )}
