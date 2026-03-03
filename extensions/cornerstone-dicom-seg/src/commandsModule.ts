@@ -728,6 +728,13 @@ const commandsModule = ({
         // Include region constraint if ROI was selected
         if (region?.polygons?.length) {
           payload.region = region;
+          // Region polygons are sent as [[x, y], ...] voxel coords (x=col, y=row)
+          // Tell the backend explicitly to avoid coord-order mismatches.
+          const existingOptions = payload.options ?? {};
+          payload.options = {
+            ...existingOptions,
+            regionCoordOrder: existingOptions.regionCoordOrder ?? 'xy',
+          };
         }
 
         const response = await fetch(endpoint, {
