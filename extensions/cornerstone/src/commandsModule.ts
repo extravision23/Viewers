@@ -311,6 +311,89 @@ function commandsModule({
     return toolGroupService.getToolGroupForViewport(viewport.id);
   }
 
+  const PLANAR_ROI_TOOL_NAMES = new Set([
+    'PlanarFreehandROI',
+    'SplineROI',
+    'LivewireContour',
+  ]);
+
+  const PLANAR_EPSILON = 1e-3;
+  function _isObliquePlanarViewport(viewport: any) {
+    if (!viewport) {
+      return false;
+    }
+
+    if (viewport instanceof StackViewport) {
+      return false;
+    }
+
+    const imageData = viewport.getImageData?.();
+    const camera = viewport.getCamera?.();
+    if (!imageData?.direction || !camera?.viewPlaneNormal || !camera?.viewUp) {
+      return false;
+    }
+
+    const { direction } = imageData;
+    const iVector = direction.slice(0, 3);
+    const jVector = direction.slice(3, 6);
+    const kVector = direction.slice(6, 9);
+
+    const viewRight = vec3.create();
+    vec3.cross(viewRight, camera.viewUp, camera.viewPlaneNormal);
+
+    const absViewRightDotI = Math.abs(vec3.dot(viewRight, iVector));
+    const absViewRightDotJ = Math.abs(vec3.dot(viewRight, jVector));
+    const absViewRightDotK = Math.abs(vec3.dot(viewRight, kVector));
+    const rightAligned =
+      Math.abs(1 - absViewRightDotI) < PLANAR_EPSILON ||
+      Math.abs(1 - absViewRightDotJ) < PLANAR_EPSILON ||
+      Math.abs(1 - absViewRightDotK) < PLANAR_EPSILON;
+
+    const absViewUpDotI = Math.abs(vec3.dot(camera.viewUp, iVector));
+    const absViewUpDotJ = Math.abs(vec3.dot(camera.viewUp, jVector));
+    const absViewUpDotK = Math.abs(vec3.dot(camera.viewUp, kVector));
+    const upAligned =
+      Math.abs(1 - absViewUpDotI) < PLANAR_EPSILON ||
+      Math.abs(1 - absViewUpDotJ) < PLANAR_EPSILON ||
+      Math.abs(1 - absViewUpDotK) < PLANAR_EPSILON;
+
+    return !(rightAligned && upAligned);
+  }
+
+  function _resetPlanarROIViewportIfNeeded(toolName?: string) {
+    if (!toolName || !PLANAR_ROI_TOOL_NAMES.has(toolName)) {
+      return;
+    }
+
+    const enabledElement = _getActiveViewportEnabledElement();
+    if (!enabledElement) {
+      return;
+    }
+
+    const { viewport } = enabledElement;
+    if (!viewport) {
+      return;
+    }
+
+    if (!_isObliquePlanarViewport(viewport)) {
+      return;
+    }
+
+    if (viewport.type === CoreEnums.ViewportType.ORTHOGRAPHIC && viewport.setOrientation) {
+      viewport.setOrientation(CoreEnums.OrientationAxis.ACQUISITION);
+    }
+
+    viewport.resetProperties?.();
+    viewport.resetCamera?.();
+    viewport.render?.();
+
+    uiNotificationService?.show?.({
+      title: 'Planar ROI',
+      message: 'View reset to acquisition orientation for planar ROI tools.',
+      type: 'info',
+    });
+  }
+
   function _getActiveSegmentationInfo() {
     const viewportId = viewportGridService.getActiveViewportId();
     const activeSegmentation = segmentationService.getActiveSegmentation(viewportId);
@@ -1429,6 +1512,8 @@ function commandsModule({
     setToolActiveToolbar: ({ value, itemId, toolName, toolGroupIds = [], bindings }) => {
       // Sometimes it is passed as value (tools with options), sometimes as itemId (toolbar buttons)
       toolName = toolName || itemId || value;
+
+      _resetPlanarROIViewportIfNeeded(toolName);
 
       toolGroupIds = toolGroupIds.length ? toolGroupIds : toolGroupService.getToolGroupIds();
 
