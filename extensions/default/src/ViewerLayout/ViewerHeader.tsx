@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Button, Header, Icons, useModal } from '@ohif/ui-next';
 import { useSystem } from '@ohif/core';
+import { JobsButton } from '../../../cornerstone/src/components/JobsButton';
 import { Toolbar } from '../Toolbar/Toolbar';
 import HeaderPatientInfo from './HeaderPatientInfo';
 import { PatientInfoVisibility } from './HeaderPatientInfo/HeaderPatientInfo';
@@ -98,6 +99,8 @@ function ViewerHeader({ appConfig }: withAppTypes<{ appConfig: AppTypes.Config }
       }
       UndoRedo={
         <div className="text-primary flex cursor-pointer items-center">
+          <JobsButton />
+          <div className="border-primary-dark mx-1.5 h-[25px] border-r" />
           <Button
             variant="ghost"
             className="hover:bg-primary-dark"

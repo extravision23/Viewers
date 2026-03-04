@@ -10,3 +10,4 @@ export * from './WindowLevelActionMenu';
 export * from './ModalityLoadBadge';
 
 export { DicomUpload };
+export { JobsButton } from './JobsButton';
