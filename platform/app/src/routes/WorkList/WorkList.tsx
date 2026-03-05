@@ -41,6 +41,7 @@ import { Types } from '@ohif/ui';
 
 import { preserveQueryParameters, preserveQueryStrings } from '../../utils/preserveQueryParameters';
 import { buildFunctionUrl } from '../../utils/buildFunctionUrl';
+import { JobsButton } from '../../../../../extensions/cornerstone/src/components/JobsButton';
 import FusionSeriesSelectionModal from './FusionSeriesSelectionModal';
 import { DicomMetadataStore } from '@ohif/core';
 
@@ -1200,6 +1201,7 @@ function WorkList({
         isReturnEnabled={false}
         WhiteLabeling={appConfig.whiteLabeling}
         showPatientInfo={PatientInfoVisibility.DISABLED}
+        UndoRedo={<JobsButton />}
       />
       <Onboarding />
       <InvestigationalUseDialog dialogConfiguration={appConfig?.investigationalUseDialog} />
