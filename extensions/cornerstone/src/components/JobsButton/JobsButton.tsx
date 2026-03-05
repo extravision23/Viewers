@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useSystem } from '@ohif/core';
 import { Button, Icons, Popover, PopoverTrigger, PopoverContent } from '@ohif/ui-next';
+import { getFunctionsBaseUrl } from '../../../../../platform/app/src/utils/buildFunctionUrl';
 
 const PAGE_SIZE = 5;
 
@@ -80,11 +81,7 @@ export function JobsButton() {
         return;
       }
       const config = ds.getConfig?.() ?? {};
-      const baseUrl =
-        config.pythonFunctionsBaseUrl ||
-        (config.pythonFunctionName
-          ? `https://${config.pythonFunctionName}.azurewebsites.net/api`
-          : null);
+      const baseUrl = getFunctionsBaseUrl(config);
       if (!baseUrl) {
         return;
       }
