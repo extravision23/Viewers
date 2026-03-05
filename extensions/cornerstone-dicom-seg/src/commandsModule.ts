@@ -1557,6 +1557,7 @@ const commandsModule = ({
     magicWandSegmentation: actions.magicWandSegmentation,
     oneClickSegmentation: actions.oneClickSegmentation,
     totalSegmentator: actions.totalSegmentator,
+    totalSpineSegmentator: actions.totalSpineSegmentator,
     // Server-side segmentation helpers
     isSegmentationSaved: actions.isSegmentationSaved,
     runServerSegmentation: actions.runServerSegmentation,
