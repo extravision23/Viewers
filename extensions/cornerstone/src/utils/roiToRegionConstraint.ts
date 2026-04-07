@@ -8,7 +8,6 @@ import * as csTools from '@cornerstonejs/tools';
 import { utilities as csUtils } from '@cornerstonejs/core';
 import { StackViewport } from '@cornerstonejs/core';
 import type { Types } from '@cornerstonejs/tools';
-import getSOPInstanceAttributes from './measurementServiceMappings/utils/getSOPInstanceAttributes';
 
 const ROI_TOOL_NAMES = [
   'EllipticalROI',
@@ -22,6 +21,7 @@ const ROI_TOOL_NAMES = [
 export interface RegionPolygon {
   sliceIndex: number;
   polygon: number[][]; // [[x, y], [x, y], ...] in voxel coords (x=col, y=row)
+  plane?: 'axial' | 'sagittal' | 'coronal';
 }
 
 export interface RegionConstraint {
@@ -136,6 +136,7 @@ function worldPointsToVoxelPolygon(
   worldPoints: [number, number, number][],
   viewport: any,
   viewportInfo: any,
+  plane?: 'axial' | 'sagittal' | 'coronal',
   annotation?: Types.Annotation
 ): RegionPolygon | null {
   if (worldPoints.length < 3) return null;
@@ -156,30 +157,64 @@ function worldPointsToVoxelPolygon(
       polygon.push([Math.round(imagePoint[0]), Math.round(imagePoint[1])]);
     }
 
-    return { sliceIndex: imageIndex, polygon };
+    return { sliceIndex: imageIndex, polygon, plane };
   }
 
-  // Volume viewport
+  // Volume viewport: we infer 2D slice plane from voxel points in the reference volume.
   const imageData = viewportInfo?.viewportData?.data?.[0]?.volume?.imageData;
   if (!imageData?.worldToIndex) return null;
 
   const { worldToIndex } = imageData;
-  const polygon: number[][] = [];
-  let sliceIndex: number | null = null;
+  const ijkPoints: Array<[number, number, number]> = [];
 
   for (const wp of worldPoints) {
     const ijk = worldToIndex(wp);
     if (ijk.length >= 3) {
-      const x = Math.round(ijk[0]);
-      const y = Math.round(ijk[1]);
-      const z = Math.round(ijk[2]);
-      polygon.push([x, y]);
-      if (sliceIndex === null) sliceIndex = z;
+      ijkPoints.push([Math.round(ijk[0]), Math.round(ijk[1]), Math.round(ijk[2])]);
     }
   }
 
-  if (polygon.length < 3 || sliceIndex === null) return null;
-  return { sliceIndex, polygon };
+  if (ijkPoints.length < 3) return null;
+
+  const xs = ijkPoints.map(p => p[0]);
+  const ys = ijkPoints.map(p => p[1]);
+  const zs = ijkPoints.map(p => p[2]);
+
+  const xRange = Math.max(...xs) - Math.min(...xs);
+  const yRange = Math.max(...ys) - Math.min(...ys);
+  const zRange = Math.max(...zs) - Math.min(...zs);
+
+  // Infer which anatomical plane ROI was drawn in by finding the most-constant axis.
+  // - axial: z constant
+  // - sagittal: x constant
+  // - coronal: y constant
+  let inferredPlane: 'axial' | 'sagittal' | 'coronal';
+  let sliceIndex: number;
+
+  if (zRange <= xRange && zRange <= yRange) {
+    inferredPlane = 'axial';
+    sliceIndex = Math.round(zs.reduce((a, b) => a + b, 0) / zs.length);
+  } else if (xRange <= yRange && xRange <= zRange) {
+    inferredPlane = 'sagittal';
+    sliceIndex = Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
+  } else {
+    inferredPlane = 'coronal';
+    sliceIndex = Math.round(ys.reduce((a, b) => a + b, 0) / ys.length);
+  }
+
+  // Build 2D polygon coords in the inferred plane.
+  // Backend expects:
+  // - axial:    polygon=[x,y]
+  // - sagittal:polygon=[y,z]
+  // - coronal: polygon=[x,z]
+  const polygon: number[][] = ijkPoints.map(([x, y, z]) => {
+    if (inferredPlane === 'sagittal') return [y, z];
+    if (inferredPlane === 'coronal') return [x, z];
+    return [x, y];
+  });
+
+  if (polygon.length < 3) return null;
+  return { sliceIndex, polygon, plane: inferredPlane };
 }
 
 /**
@@ -188,7 +223,7 @@ function worldPointsToVoxelPolygon(
  */
 export function getRegionConstraintFromSelectedROI(
   viewportId: string,
-  seriesInstanceUID: string,
+  _seriesInstanceUID: string,
   services: Services
 ): RegionConstraint | null {
   const { cornerstoneViewportService, displaySetService } = services;
@@ -197,41 +232,43 @@ export function getRegionConstraintFromSelectedROI(
 
   if (!viewport || !viewportInfo) return null;
 
+  // NOTE: for volume viewports we infer plane per-ROI in voxel space,
+  // so we don't need to pass a plane derived from viewport orientation.
+
   const allPolygons: RegionPolygon[] = [];
 
   for (const toolName of ROI_TOOL_NAMES) {
-    const annotationUIDs = csTools.annotation.selection.getAnnotationsSelectedByToolName(toolName);
-    if (!annotationUIDs?.length) continue;
-
     const annotationManager = csTools.annotation.state.getAnnotationManager();
     if (!annotationManager) continue;
 
-    for (const uid of annotationUIDs) {
-      const annotation = csTools.annotation.state.getAnnotation(uid);
-      if (!annotation) continue;
+    // Include all ROI annotations for this tool type across frames of reference.
+    // (annotationManager.getAnnotations(toolName) isn't a supported API, so we iterate frames.)
+    const framesOfReference: string[] = annotationManager.getFramesOfReference?.() ?? [];
 
-      const { metadata } = annotation;
-      let refSeriesUID: string | undefined;
-
-      if (metadata?.referencedImageId) {
-        const attrs = getSOPInstanceAttributes(
-          metadata.referencedImageId,
-          displaySetService as any,
-          annotation
-        );
-        refSeriesUID = attrs?.SeriesInstanceUID;
-      } else {
-        const displaySets = displaySetService.getDisplaySetsForSeries(seriesInstanceUID);
-        const ds = displaySets?.[0];
-        refSeriesUID = ds?.metadata?.SeriesInstanceUID ?? seriesInstanceUID;
+    let annotationsForTool: Types.Annotation[] = [];
+    for (const frameOfReferenceUID of framesOfReference) {
+      const frameAnnotations = annotationManager.getAnnotations(frameOfReferenceUID as any) as
+        | Record<string, Types.Annotation[]>
+        | undefined;
+      const toolAnnotations = frameAnnotations?.[toolName as any];
+      if (toolAnnotations?.length) {
+        annotationsForTool = annotationsForTool.concat(toolAnnotations);
       }
+    }
 
-      if (refSeriesUID !== seriesInstanceUID) continue;
+    if (!annotationsForTool.length) continue;
 
+    for (const annotation of annotationsForTool) {
       const worldPoints = getWorldPointsFromAnnotation(annotation, toolName);
       if (!worldPoints) continue;
 
-      const regionPolygon = worldPointsToVoxelPolygon(worldPoints, viewport, viewportInfo, annotation);
+      const regionPolygon = worldPointsToVoxelPolygon(
+        worldPoints,
+        viewport,
+        viewportInfo,
+        undefined,
+        annotation
+      );
       if (regionPolygon) {
         allPolygons.push(regionPolygon);
       }

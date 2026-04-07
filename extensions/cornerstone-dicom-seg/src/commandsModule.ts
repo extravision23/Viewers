@@ -7,6 +7,7 @@ import { adaptersRT, helpers, adaptersSEG } from '@cornerstonejs/adapters';
 import { createReportDialogPrompt, useUIStateStore } from '@ohif/extension-default';
 import { DicomMetadataStore } from '@ohif/core';
 import { buildFunctionUrl } from '@ohif/app/src/utils/buildFunctionUrl';
+import GlbPreviewDialog from './components/GlbPreviewDialog';
 
 import PROMPT_RESPONSES from '../../default/src/utils/_shared/PROMPT_RESPONSES';
 import {
@@ -40,6 +41,30 @@ const { downloadDICOMData } = helpers;
 function getAuthHeader(dataSource) {
   const bearer = dataSource?.retrieve?.customClient?.headers?.Authorization;
   return bearer ? { Authorization: bearer } : {};
+}
+
+async function readConvertResponse(response: Response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return response.json();
+  }
+
+  const text = await response.text();
+  return {
+    artifacts: text
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line && !line.toLowerCase().startsWith('uploaded'))
+      .map(blobPath => ({
+        format: blobPath.toLowerCase().endsWith('.glb') ? 'glb' : 'obj',
+        blobPath,
+      })),
+  };
+}
+
+function appendQueryParam(url: string, key: string, value: string): string {
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
 }
 
 /**
@@ -601,6 +626,109 @@ const commandsModule = ({
         uiNotificationService.show({
           title: 'Download Failed',
           message: error.message || 'Failed to download OBJ file',
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    },
+    previewSegmentation3D: async ({ segmentationId, dataSource, noCache = false }) => {
+      const { uiNotificationService, uiDialogService } = servicesManager.services as AppTypes.Services;
+
+      const loadingNotificationId = uiNotificationService.show({
+        title: 'Processing',
+        message: 'Converting segmentation to GLB format...',
+        type: 'info',
+        duration: 0,
+      });
+
+      try {
+        const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
+        if (!segmentationInOHIF) {
+          throw new Error('Segmentation not found');
+        }
+
+        const generatedSegmentation = actions.generateSegmentation({ segmentationId });
+        if (!generatedSegmentation || !generatedSegmentation.dataset) {
+          throw new Error('Failed to generate segmentation dataset.');
+        }
+
+        const dataset = generatedSegmentation.dataset;
+        const dicomBlob = dcmjs.data.datasetToBlob(dataset);
+
+        const formData = new FormData();
+        formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
+        formData.append('format', 'glb');
+        formData.append('response', 'json');
+
+        const selectedSegmentNumbers = getVisibleSegmentNumbers(
+          segmentationId,
+          segmentationService,
+          viewportGridService
+        );
+        if (selectedSegmentNumbers?.length) {
+          formData.append('segments', selectedSegmentNumbers.join(','));
+        }
+
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
+        const baseEndpoint = buildFunctionUrl(config, 'ConvertDicomToObj');
+        const endpoint = noCache
+          ? appendQueryParam(baseEndpoint, 'forceRegenerate', '1')
+          : baseEndpoint;
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            ...getAuthHeader(defaultDataSource),
+          },
+        });
+
+        if (loadingNotificationId) {
+          uiNotificationService.hide(loadingNotificationId);
+        }
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => response.statusText);
+          throw new Error(`Server error: ${response.status} ${errorText}`);
+        }
+
+        const payload = await readConvertResponse(response);
+        const glbArtifacts = (payload?.artifacts || []).filter(
+          item => String(item.format || '').toLowerCase() === 'glb' && item?.url
+        );
+        if (!glbArtifacts.length) {
+          throw new Error('GLB URL is missing in conversion response.');
+        }
+
+        uiDialogService.show({
+          id: 'segmentation-glb-preview',
+          title: 'Preview 3D (GLB)',
+          content: GlbPreviewDialog,
+          shouldCloseOnEsc: true,
+          contentProps: {
+            models: glbArtifacts.map(item => ({
+              url: item.url,
+              label: item.label,
+              segmentNumber: item.segmentNumber,
+            })),
+            title: segmentationInOHIF.label,
+          },
+        });
+
+        uiNotificationService.show({
+          title: 'Ready',
+          message: '3D preview is ready.',
+          type: 'success',
+          duration: 2500,
+        });
+      } catch (error) {
+        if (loadingNotificationId) {
+          uiNotificationService.hide(loadingNotificationId);
+        }
+        uiNotificationService.show({
+          title: 'Preview Failed',
+          message: error.message || 'Failed to preview GLB model',
           type: 'error',
           duration: 5000,
         });
@@ -1553,6 +1681,7 @@ const commandsModule = ({
     toggleActiveSegmentationUtility: actions.toggleActiveSegmentationUtility,
     sendToGlasses: actions.sendToGlasses,
     downloadObj: actions.downloadObj,
+    previewSegmentation3D: actions.previewSegmentation3D,
     segmentByPreset: actions.segmentByPreset,
     magicWandSegmentation: actions.magicWandSegmentation,
     oneClickSegmentation: actions.oneClickSegmentation,

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   IconPresentationProvider,
   Popover,
@@ -62,6 +62,8 @@ export default function PanelSegmentation({
     useActiveViewportSegmentationRepresentations();
 
   const setUIState = useUIStateStore(store => store.setUIState);
+  const [previewNoCache, setPreviewNoCache] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   // useEffect for handling clicks on any of the non-active viewports.
   // The ViewportGrid stops the propagation of pointer/mouse events
@@ -272,6 +274,57 @@ export default function PanelSegmentation({
     );
   };
 
+  const renderPreviewControls = () => {
+    if (segmentationRepresentationType !== SegmentationRepresentations.Labelmap) {
+      return null;
+    }
+
+    const canPreview = !!selectedSegmentationIdForType && !previewLoading;
+    return (
+      <div className="border-input mb-2 flex items-center justify-between rounded border px-2 py-1.5">
+        <button
+          type="button"
+          className="bg-primary text-primary-foreground disabled:bg-muted disabled:text-muted-foreground rounded px-3 py-1 text-xs"
+          disabled={!canPreview}
+          onClick={async () => {
+            if (!selectedSegmentationIdForType) {
+              return;
+            }
+            try {
+              setPreviewLoading(true);
+              await Promise.resolve(
+                commandsManager.run('previewSegmentation3D', {
+                  segmentationId: selectedSegmentationIdForType,
+                  noCache: previewNoCache,
+                })
+              );
+            } finally {
+              setPreviewLoading(false);
+            }
+          }}
+        >
+          {previewLoading ? (
+            <span className="flex items-center gap-1">
+              <span className="animate-spin">⏳</span>
+              Generating 3D...
+            </span>
+          ) : (
+            'Preview 3D (GLB)'
+          )}
+        </button>
+        <label className="text-muted-foreground flex items-center gap-1 text-xs">
+          <input
+            type="checkbox"
+            checked={previewNoCache}
+            disabled={previewLoading}
+            onChange={e => setPreviewNoCache(e.target.checked)}
+          />
+          No Cache
+        </label>
+      </div>
+    );
+  };
+
   // Render content based on mode
   const renderModeContent = () => {
     if (tableProps.mode === 'collapsed') {
@@ -286,6 +339,7 @@ export default function PanelSegmentation({
             <SegmentationTable.Collapsed.Info />
           </SegmentationTable.Collapsed.Header>
           <SegmentationTable.Collapsed.Content>
+            {renderPreviewControls()}
             <SegmentationTable.AddSegmentRow />
             {renderSegments()}
           </SegmentationTable.Collapsed.Content>
@@ -306,6 +360,7 @@ export default function PanelSegmentation({
           </SegmentationTable.Expanded.Header>
 
           <SegmentationTable.Expanded.Content>
+            {renderPreviewControls()}
             <SegmentationTable.AddSegmentRow />
             {renderSegments()}
           </SegmentationTable.Expanded.Content>
