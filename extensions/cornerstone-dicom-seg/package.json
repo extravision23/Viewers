@@ -49,6 +49,7 @@
     "@cornerstonejs/adapters": "4.15.2",
     "@cornerstonejs/core": "4.15.2",
     "@kitware/vtk.js": "34.15.1",
-    "react-color": "2.19.3"
+    "react-color": "2.19.3",
+    "three": "^0.181.1"
   }
 }
