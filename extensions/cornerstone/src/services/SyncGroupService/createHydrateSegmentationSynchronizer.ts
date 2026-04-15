@@ -96,10 +96,6 @@ const segmentationRepresentationModifiedCallback = async (
     segmentationId,
     sourceType: segmentationRepresentationType,
     isVolume3D,
-    config: {
-      blendMode:
-        viewport?.getBlendMode?.() === 1 ? BlendModes.LABELMAP_EDGE_PROJECTION_BLEND : undefined,
-    },
   });
 
   // For 3D viewports, ensure BOTH Labelmap (for UI) and Surface (for rendering) exist.

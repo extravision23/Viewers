@@ -78,7 +78,7 @@ function _getDisplaySetsFromSeries(
 
   const referencedSeries = referencedSeriesSequence[0] || referencedSeriesSequence;
 
-  displaySet.referencedImages = instance.ReferencedSeriesSequence.ReferencedInstanceSequence;
+  displaySet.referencedImages = referencedSeries.ReferencedInstanceSequence;
   displaySet.referencedSeriesInstanceUID = referencedSeries.SeriesInstanceUID;
   const { displaySetService } = servicesManager.services;
   const referencedDisplaySets = displaySetService.getDisplaySetsForReferences(
@@ -91,7 +91,20 @@ function _getDisplaySetsFromSeries(
     );
   }
 
-  const referencedDisplaySet = referencedDisplaySets[0];
+  let referencedDisplaySet = referencedDisplaySets[0];
+
+  // Enhanced multiframe CT/MR: ReferencedInstanceSequence SOP UIDs may not match the single
+  // cached instance (e.g. per-frame synthetic UIDs in SEG). Resolve by series instead.
+  if (!referencedDisplaySet && displaySet.referencedSeriesInstanceUID) {
+    const seriesMatches = displaySetService.getDisplaySetsForSeries(
+      displaySet.referencedSeriesInstanceUID
+    );
+    referencedDisplaySet = seriesMatches[0];
+    if (referencedDisplaySet) {
+      displaySet.referencedDisplaySetInstanceUID = referencedDisplaySet.displaySetInstanceUID;
+      displaySet.isReconstructable = referencedDisplaySet.isReconstructable;
+    }
+  }
 
   if (!referencedDisplaySet) {
     // subscribe to display sets added which means at some point it will be available

@@ -2,7 +2,7 @@ name: Deploy OHIF static site to Azure Storage ($web)
 
 on:
   push:
-    branches: [develop, production]
+    branches: [develop, main]
 
 permissions:
   contents: read
@@ -45,7 +45,7 @@ jobs:
         run: |
           if [ "${GITHUB_REF_NAME}" = "develop" ]; then
             echo "account=extravisionohif" >> $GITHUB_OUTPUT
-          elif [ "${GITHUB_REF_NAME}" = "production" ]; then
+          elif [ "${GITHUB_REF_NAME}" = "main" ]; then
             echo "account=stdicomdata" >> $GITHUB_OUTPUT
           else
             echo "Unsupported branch: ${GITHUB_REF_NAME}"

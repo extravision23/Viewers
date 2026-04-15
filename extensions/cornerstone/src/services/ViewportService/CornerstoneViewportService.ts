@@ -9,7 +9,6 @@ import {
   utilities as csUtils,
   VolumeViewport,
   VolumeViewport3D,
-  ECGViewport,
   cache,
   Enums as csEnums,
   BaseVolumeViewport,
@@ -39,7 +38,6 @@ import { usePositionPresentationStore } from '../../stores/usePositionPresentati
 import { useSynchronizersStore } from '../../stores/useSynchronizersStore';
 import { useSegmentationPresentationStore } from '../../stores/useSegmentationPresentationStore';
 import getClosestOrientationFromIOP from '../../utils/isReferenceViewable';
-import { BlendModes } from '@cornerstonejs/core/enums';
 
 const EVENTS = {
   VIEWPORT_DATA_CHANGED: 'event::cornerstoneViewportService:viewportDataChanged',
@@ -789,19 +787,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
   /**
    * Sets the image data for the given viewport.
    */
-  private async _setEcgViewport(
-    viewport: Types.IECGViewport,
-    viewportData: StackViewportData
-  ): Promise<void> {
-    const [displaySet] = viewportData.data;
-    const imageId = displaySet.imageIds?.[0];
-    if (!imageId) {
-      console.error('[CornerstoneViewportService] ECG display set has no imageId');
-      return;
-    }
-    return viewport.setEcg(imageId);
-  }
-
   private async _setOtherViewport(
     viewport: Types.IStackViewport,
     viewportData: StackViewportData,
@@ -880,21 +865,28 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       initialImageIndexToUse = this._getInitialImageIndexForViewport(viewportInfo, imageIds) || 0;
     }
 
-    await viewport.setStack(imageIds, initialImageIndexToUse);
-    viewport.setProperties({ ...properties });
-    this.setPresentations(viewport.id, presentations, viewportInfo);
+    return viewport.setStack(imageIds, initialImageIndexToUse).then(() => {
+      viewport.setProperties({ ...properties });
+      this.setPresentations(viewport.id, presentations, viewportInfo);
 
-    await this._addOverlayRepresentations(overlayProcessingResults);
+      if (overlayProcessingResults?.length) {
+        overlayProcessingResults.forEach(overlayProcessingResult => {
+          if (overlayProcessingResult?.addOverlayFn) {
+            overlayProcessingResult.addOverlayFn();
+          }
+        });
+      }
 
-    if (displayArea) {
-      viewport.setDisplayArea(displayArea);
-    }
-    if (rotation) {
-      viewport.setProperties({ rotation });
-    }
-    if (flipHorizontal) {
-      viewport.setCamera({ flipHorizontal: true });
-    }
+      if (displayArea) {
+        viewport.setDisplayArea(displayArea);
+      }
+      if (rotation) {
+        viewport.setProperties({ rotation });
+      }
+      if (flipHorizontal) {
+        viewport.setCamera({ flipHorizontal: true });
+      }
+    });
   }
 
   private _getInitialImageIndexForViewport(
@@ -1123,7 +1115,14 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     }
 
     await viewport.setVolumes(volumeInputArray);
-    await this._addOverlayRepresentations(overlayProcessingResults);
+
+    if (overlayProcessingResults?.length) {
+      overlayProcessingResults.forEach(({ addOverlayFn }) => {
+        if (addOverlayFn) {
+          addOverlayFn();
+        }
+      });
+    }
     viewport.render();
 
     volumesProperties.forEach(({ properties, volumeId }) => {
@@ -1192,7 +1191,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
   private addOverlayRepresentationForDisplaySet(
     displaySet: OhifTypes.DisplaySet,
     viewport: Types.IViewport
-  ): Promise<void> {
+  ) {
     const { segmentationService } = this.servicesManager.services;
     const segmentationId = displaySet.displaySetInstanceUID;
 
@@ -1202,36 +1201,14 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
         : csToolsEnums.SegmentationRepresentations.Contour;
 
     const { predecessorImageId } = displaySet;
-    const segmentationRepresentationPromise = segmentationService.addSegmentationRepresentation(
-      viewport.id,
-      {
-        segmentationId,
-        predecessorImageId,
-        type: representationType,
-        config: {
-          blendMode:
-            viewport?.getBlendMode?.() === 1
-              ? BlendModes.LABELMAP_EDGE_PROJECTION_BLEND
-              : undefined,
-        },
-      }
-    );
+    segmentationService.addSegmentationRepresentation(viewport.id, {
+      segmentationId,
+      predecessorImageId,
+      type: representationType,
+    });
+
     // store the segmentation presentation id in the viewport info
     this.storePresentation({ viewportId: viewport.id });
-    return segmentationRepresentationPromise;
-  }
-
-  private async _addOverlayRepresentations(
-    overlayProcessingResults?: Array<{ addOverlayFn?: () => Promise<void> }>
-  ): Promise<void> {
-    if (!overlayProcessingResults?.length) {
-      return;
-    }
-    for (const overlayProcessingResult of overlayProcessingResults) {
-      if (overlayProcessingResult?.addOverlayFn) {
-        await overlayProcessingResult.addOverlayFn();
-      }
-    }
   }
 
   // Todo: keepCamera is an interim solution until we have a better solution for
@@ -1288,13 +1265,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       );
     }
 
-    if (viewport instanceof ECGViewport) {
-      return this._setEcgViewport(
-        viewport as unknown as Types.IECGViewport,
-        viewportData as StackViewportData
-      );
-    }
-
     return this._setOtherViewport(
       viewport,
       viewportData as StackViewportData,
@@ -1346,8 +1316,8 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       return;
     }
 
-    if (displaySet.FrameOfReferenceUID) {
-      return displaySet.FrameOfReferenceUID;
+    if (displaySet.frameOfReferenceUID) {
+      return displaySet.frameOfReferenceUID;
     }
 
     if (displaySet.Modality === 'SEG') {
@@ -1500,80 +1470,68 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       const representationType = type === Surface && !isVolume3D ? Labelmap : type;
 
       if (hydrated) {
-        segmentationService
-          .addSegmentationRepresentation(viewport.id, {
-            segmentationId,
-            type: representationType,
-            config: {
-              blendMode:
-                viewport?.getBlendMode?.() === 1
-                  ? BlendModes.LABELMAP_EDGE_PROJECTION_BLEND
-                  : undefined,
-            },
-          })
-          .then(() => {
-            // After segmentation representation is added, update volume opacity if needed
-            if (shouldHideVolume && isVolume3D && viewport instanceof VolumeViewport3D) {
-              const updateVolumeOpacity = () => {
-                const representations = segmentationService.getSegmentationRepresentations(viewport.id);
-                const hasSurfaceRepresentation = representations.some(
-                  rep => rep.type === Surface && rep.segmentationId === segmentationId
-                );
-
-                const volumeIds = viewport.getAllVolumeIds();
-                if (volumeIds.length > 0) {
-                  volumeIds.forEach(volId => {
-                    if (hasSurfaceRepresentation) {
-                      // Hide volume completely for Surface representation (segments only)
-                      viewport.setProperties(
-                        {
-                          colormap: {
-                            opacity: 0,
-                          },
-                        },
-                        volId
-                      );
-                    } else {
-                      // For Labelmap, make volume very transparent but not completely invisible
-                      // This allows the labelmap overlay to be visible
-                      viewport.setProperties(
-                        {
-                          colormap: {
-                            opacity: 0.1,
-                          },
-                        },
-                        volId
-                      );
-                    }
-                  });
-                  viewport.render();
-                  return true;
-                }
-                return false;
-              };
-
-              // Try multiple times with increasing delays to ensure it works
-              // This handles cases where representation or volumes aren't ready immediately
-              const attempts = [100, 500, 1000, 2000, 3000];
-              attempts.forEach(delay => {
-                setTimeout(() => {
-                  updateVolumeOpacity();
-                }, delay);
-              });
-
-              // Also listen for volume loaded events
-              const handleVolumeLoaded = () => {
-                updateVolumeOpacity();
-              };
-              viewport.element.addEventListener(
-                csEnums.Events.VOLUME_VIEWPORT_NEW_VOLUME,
-                handleVolumeLoaded
+        segmentationService.addSegmentationRepresentation(viewport.id, {
+          segmentationId,
+          type: representationType,
+        }).then(() => {
+          // After segmentation representation is added, update volume opacity if needed
+          if (shouldHideVolume && isVolume3D && viewport instanceof VolumeViewport3D) {
+            const updateVolumeOpacity = () => {
+              const representations = segmentationService.getSegmentationRepresentations(viewport.id);
+              const hasSurfaceRepresentation = representations.some(
+                rep => rep.type === Surface && rep.segmentationId === segmentationId
               );
-            }
-          })
-          .catch(err => {
-            console.warn('Error adding segmentation representation:', err);
-          });
+
+              const volumeIds = viewport.getAllVolumeIds();
+              if (volumeIds.length > 0) {
+                volumeIds.forEach(volId => {
+                  if (hasSurfaceRepresentation) {
+                    // Hide volume completely for Surface representation (segments only)
+                    viewport.setProperties(
+                      {
+                        colormap: {
+                          opacity: 0,
+                        },
+                      },
+                      volId
+                    );
+                  } else {
+                    // For Labelmap, make volume very transparent but not completely invisible
+                    // This allows the labelmap overlay to be visible
+                    viewport.setProperties(
+                      {
+                        colormap: {
+                          opacity: 0.1,
+                        },
+                      },
+                      volId
+                    );
+                  }
+                });
+                viewport.render();
+                return true;
+              }
+              return false;
+            };
+
+            // Try multiple times with increasing delays to ensure it works
+            // This handles cases where representation or volumes aren't ready immediately
+            const attempts = [100, 500, 1000, 2000, 3000];
+            attempts.forEach(delay => {
+              setTimeout(() => {
+                updateVolumeOpacity();
+              }, delay);
+            });
+
+            // Also listen for volume loaded events
+            const handleVolumeLoaded = () => {
+              updateVolumeOpacity();
+            };
+            viewport.element.addEventListener(csEnums.Events.VOLUME_VIEWPORT_NEW_VOLUME, handleVolumeLoaded);
+          }
+        }).catch(err => {
+          console.warn('Error adding segmentation representation:', err);
+        });
       }
     });
   }

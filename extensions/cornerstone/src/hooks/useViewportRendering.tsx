@@ -10,7 +10,6 @@ import {
   BaseVolumeViewport,
   cache,
 } from '@cornerstonejs/core';
-import { getDataIdForViewport } from '../utils/getDataIdForViewport';
 import { WindowLevelPreset } from '../types/WindowLevel';
 import { ColorbarPositionType, ColorbarOptions, ColorbarProperties } from '../types/Colorbar';
 import { VolumeRenderingConfig } from '../types/VolumeRenderingConfig';
@@ -105,6 +104,11 @@ const opacityToLinear = (opacityValue: number): number => {
   return Math.pow(opacityValue, 1.0 / GAMMA);
 };
 
+const is3DViewport = ({ viewportId, cornerstoneViewportService }) => {
+  const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+  return viewport instanceof VolumeViewport3D;
+};
+
 /**
  * Hook to access window level functionality for a specific viewport
  *
@@ -120,17 +124,15 @@ export function useViewportRendering(
   const { cornerstoneViewportService, colorbarService, customizationService } =
     servicesManager.services;
 
+  const [is3DVolume, setIs3DVolume] = useState(
+    is3DViewport({ viewportId, cornerstoneViewportService })
+  );
   const [hasColorbar, setHasColorbar] = useState(colorbarService.hasColorbar(viewportId));
   const [colorbarPosition, setColorbarPosition] = useState<ColorbarPositionType>(
     options?.location ? getPosition(options.location) : 'bottom'
   );
   const [voiRange, setVoiRange] = useState<{ lower: number; upper: number } | undefined>();
   const voiRangeRef = React.useRef<{ lower: number; upper: number } | undefined>();
-  // Viewport from service; kept in state so we can subscribe to VIEWPORT_DATA_CHANGED when null and re-run effects when it becomes available
-  const [viewport, setViewport] = useState<Types.IViewport | null>(() =>
-    viewportId ? (cornerstoneViewportService.getCornerstoneViewport(viewportId) ?? null) : null
-  );
-  const [is3DVolume, setIs3DVolume] = useState(viewport instanceof VolumeViewport3D);
   const [opacity, setOpacityState] = useState<number | undefined>();
   const [opacityLinear, setOpacityLinearState] = useState<number | undefined>();
   const [threshold, setThresholdState] = useState<number | undefined>();
@@ -176,34 +178,6 @@ export function useViewportRendering(
     );
   }, [viewportDisplaySets, presets]);
 
-  // Keep viewport in state; when not available, subscribe to VIEWPORT_DATA_CHANGED so we set it when the viewport is ready
-  useEffect(() => {
-    if (!viewportId) {
-      setViewport(null);
-      return;
-    }
-    const vp = cornerstoneViewportService.getCornerstoneViewport(viewportId);
-    setViewport(vp ?? null);
-    if (vp) {
-      return;
-    }
-    const { unsubscribe } = cornerstoneViewportService.subscribe(
-      cornerstoneViewportService.EVENTS.VIEWPORT_DATA_CHANGED,
-      ({ viewportId: eventViewportId }) => {
-        if (eventViewportId !== viewportId) {
-          return;
-        }
-        const next = cornerstoneViewportService.getCornerstoneViewport(viewportId);
-        if (next) {
-          setViewport(next);
-        }
-      }
-    );
-    return () => {
-      unsubscribe();
-    };
-  }, [viewportId, cornerstoneViewportService]);
-
   // Calculate pixel value range for the active display set
   useEffect(() => {
     if (!activeDisplaySetInstanceUID) {
@@ -233,15 +207,17 @@ export function useViewportRendering(
       console.warn('[MPR DEBUG] displaySet logging failed', error);
     }
 
-    if (!viewport) {
+    const csViewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+
+    if (!csViewport) {
       return;
     }
 
-    if (!(viewport instanceof BaseVolumeViewport)) {
+    if (!(csViewport instanceof BaseVolumeViewport)) {
       return;
     }
 
-    const volumeIds = viewport.getAllVolumeIds();
+    const volumeIds = csViewport.getAllVolumeIds();
     const volumeId = volumeIds.find(id => id.includes(activeDisplaySetInstanceUID));
 
     if (!volumeId) {
@@ -249,7 +225,7 @@ export function useViewportRendering(
     }
 
     // only handle volume viewports for now
-    const imageData = viewport.getImageData(volumeId);
+    const imageData = csViewport.getImageData(volumeId);
 
     if (!imageData) {
       return;
@@ -265,7 +241,7 @@ export function useViewportRendering(
         const direction = imageDataVtk.getDirection?.();
         const origin = imageDataVtk.getOrigin?.();
         const dimensions = imageDataVtk.getDimensions?.();
-        const camera = viewport.getCamera?.();
+        const camera = csViewport.getCamera?.();
         const spacingInNormal =
           camera?.viewPlaneNormal && imageDataVtk
             ? utilities.getSpacingInNormalDirection(
@@ -304,7 +280,7 @@ export function useViewportRendering(
     const range = voxelManager.getRange();
 
     setPixelValueRange({ min: range[0], max: range[1] });
-  }, [activeDisplaySetInstanceUID, displaySetService, viewport]);
+  }, [activeDisplaySetInstanceUID, displaySetService, cornerstoneViewportService, viewportId]);
 
   // Get the presets specifically for the active display set
   const activeDisplaySetPresets = useMemo(() => {
@@ -324,47 +300,55 @@ export function useViewportRendering(
   }, [allWindowLevelPresets, activeDisplaySetInstanceUID]);
 
   useEffect(() => {
-    setIs3DVolume(viewport instanceof VolumeViewport3D);
+    setIs3DVolume(is3DViewport({ viewportId, cornerstoneViewportService }));
 
-    if (!viewport || !activeDisplaySetInstanceUID) {
-      return;
+    const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+
+    // Initialize the VOI range from the viewport
+    if (viewport && activeDisplaySetInstanceUID) {
+      try {
+        let properties;
+
+        if (viewport instanceof StackViewport) {
+          properties = viewport.getProperties();
+          if (properties.voiRange) {
+            setVoiRange(properties.voiRange);
+            voiRangeRef.current = properties.voiRange;
+          }
+        } else if (viewport instanceof BaseVolumeViewport) {
+          // For volume viewports, find the actor for the active display set
+          const volumeIds = viewport.getAllVolumeIds();
+          const volumeId = volumeIds.find(id => id.includes(activeDisplaySetInstanceUID));
+
+          if (volumeId) {
+            properties = viewport.getProperties(volumeId);
+            if (properties?.voiRange) {
+              setVoiRange(properties.voiRange);
+              voiRangeRef.current = properties.voiRange;
+            }
+
+            // Get opacity from colormap if available
+            if (properties?.colormap?.opacity !== undefined) {
+              const isArray = Array.isArray(properties.colormap.opacity);
+              const opacity = isArray
+                ? properties.colormap.opacity.reduce((max, current) => Math.max(max, current), 0)
+                : properties.colormap.opacity;
+
+              setOpacityState(opacity);
+              setOpacityLinearState(opacityToLinear(opacity));
+            }
+
+            // Get threshold from colormap if available
+            if (properties?.colormap && properties.colormap.threshold !== undefined) {
+              setThresholdState(properties.colormap.threshold);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error initializing VOI range:', error);
+      }
     }
-    try {
-      const dataId = getDataIdForViewport(viewport as unknown, activeDisplaySetInstanceUID);
-
-      const properties =
-        dataId != null
-          ? (viewport as Types.IBaseVolumeViewport).getProperties(dataId)
-          : viewport.getProperties();
-
-      if (!properties) {
-        return;
-      }
-
-      if (properties.voiRange) {
-        setVoiRange(properties.voiRange);
-        voiRangeRef.current = properties.voiRange;
-      }
-
-      if (properties.colormap?.opacity !== undefined) {
-        const opacityVal = properties.colormap.opacity;
-        const opacity = Array.isArray(opacityVal)
-          ? (opacityVal as unknown as number[]).reduce(
-              (max, current) => Math.max(max, current),
-              0
-            )
-          : opacityVal;
-        setOpacityState(opacity);
-        setOpacityLinearState(opacityToLinear(opacity));
-      }
-
-      if (properties.colormap?.threshold !== undefined) {
-        setThresholdState(properties.colormap.threshold);
-      }
-    } catch (error) {
-      console.error('Error initializing VOI range:', error);
-    }
-  }, [activeDisplaySetInstanceUID, viewport]);
+  }, [cornerstoneViewportService, viewportId, activeDisplaySetInstanceUID]);
 
   useEffect(() => {
     if (!viewportId) {
@@ -389,11 +373,19 @@ export function useViewportRendering(
   }, [colorbarService, viewportId]);
 
   useEffect(() => {
-    if (!activeDisplaySetInstanceUID || !viewport?.element) {
+    if (!viewportId || !activeDisplaySetInstanceUID) {
+      return;
+    }
+
+    const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+    if (!viewport) {
       return;
     }
 
     const element = viewport.element;
+    if (!element) {
+      return;
+    }
 
     const updateVOI = eventDetail => {
       const { range } = eventDetail.detail;
@@ -437,7 +429,7 @@ export function useViewportRendering(
       element.removeEventListener(Enums.Events.VOI_MODIFIED, updateVOI);
       element.removeEventListener(Enums.Events.COLORMAP_MODIFIED, updateColormap);
     };
-  }, [activeDisplaySetInstanceUID, viewport, opacityToLinear]);
+  }, [viewportId, activeDisplaySetInstanceUID, cornerstoneViewportService, opacityToLinear]);
 
   const validateActiveDisplaySet = useCallback(() => {
     if (!activeDisplaySetInstanceUID) {
@@ -628,11 +620,16 @@ export function useViewportRendering(
         context: 'CORNERSTONE',
       });
     },
-    [commandsManager, validateActiveDisplaySet, viewport, viewportId]
+    [commandsManager, viewportId, validateActiveDisplaySet]
   );
 
   const setOpacity = useCallback(
     (opacityValue: number) => {
+      if (!viewportId) {
+        return;
+      }
+
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
       if (!viewport || !(viewport instanceof BaseVolumeViewport)) {
         return;
       }
@@ -670,7 +667,7 @@ export function useViewportRendering(
 
       viewport.render();
     },
-    [validateActiveDisplaySet, opacityToLinear, viewport]
+    [cornerstoneViewportService, viewportId, validateActiveDisplaySet, opacityToLinear]
   );
 
   const setOpacityLinear = useCallback(
@@ -684,6 +681,11 @@ export function useViewportRendering(
 
   const setThreshold = useCallback(
     (thresholdValue: number) => {
+      if (!viewportId) {
+        return;
+      }
+
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
       if (!viewport || !(viewport instanceof BaseVolumeViewport)) {
         return;
       }
@@ -711,16 +713,18 @@ export function useViewportRendering(
 
       viewport.render();
     },
-    [validateActiveDisplaySet, viewport]
+    [cornerstoneViewportService, viewportId, validateActiveDisplaySet]
   );
 
   // Get the current colormap for the active display set
   const colormap = useMemo(() => {
-    if (!activeDisplaySetInstanceUID || !viewportDisplaySets?.length) {
+    if (!viewportId || !activeDisplaySetInstanceUID || !viewportDisplaySets?.length) {
       return null;
     }
 
     try {
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+
       if (!viewport) {
         return null;
       }
@@ -767,7 +771,13 @@ export function useViewportRendering(
         colorbarProperties?.colormaps?.[0]
       );
     }
-  }, [activeDisplaySetInstanceUID, viewportDisplaySets, colorbarProperties?.colormaps, viewport]);
+  }, [
+    cornerstoneViewportService,
+    viewportId,
+    activeDisplaySetInstanceUID,
+    viewportDisplaySets,
+    colorbarProperties?.colormaps,
+  ]);
 
   // 3D volume rendering functions
   const setVolumeRenderingPreset = useCallback(
@@ -851,9 +861,7 @@ export function useViewportRendering(
     setWindowLevel,
     setVOIRange,
     voiRange,
-    windowLevel: voiRange
-      ? utilities.windowLevel.toWindowLevel(voiRange?.lower, voiRange?.upper)
-      : { windowCenter: null, windowWidth: null },
+    windowLevel: utilities.windowLevel.toWindowLevel(voiRange?.lower, voiRange?.upper),
 
     // Colorbar functions
     hasColorbar,

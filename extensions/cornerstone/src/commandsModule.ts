@@ -562,7 +562,25 @@ function commandsModule({
 
       }
 
-      const referencedDisplaySetInstanceUID = displaySet.referencedDisplaySetInstanceUID;
+      let referencedDisplaySetInstanceUID = displaySet.referencedDisplaySetInstanceUID;
+
+      // Multiframe source series: SEG ReferencedInstanceSequence may list SOP UIDs that do not
+      // match the single multiframe instance in the viewer cache, so getDisplaySetsForReferences
+      // yields nothing and SOP-class init leaves referencedDisplaySetInstanceUID null. Fall back
+      // to any display set for ReferencedSeriesSequence.SeriesInstanceUID.
+      if (
+        displaySet.Modality === 'SEG' &&
+        !referencedDisplaySetInstanceUID &&
+        (displaySet as any).referencedSeriesInstanceUID
+      ) {
+        const seriesUid = (displaySet as any).referencedSeriesInstanceUID as string;
+        const fromSeries = displaySetService.getDisplaySetsForSeries(seriesUid);
+        if (fromSeries?.length) {
+          referencedDisplaySetInstanceUID = fromSeries[0].displaySetInstanceUID;
+          (displaySet as any).referencedDisplaySetInstanceUID = referencedDisplaySetInstanceUID;
+          displaySet.isReconstructable = fromSeries[0].isReconstructable;
+        }
+      }
 
       const storePositionPresentation = refDisplaySet => {
         // update the previously stored positionPresentation with the new viewportId
@@ -575,6 +593,13 @@ function commandsModule({
       };
 
       if (displaySet.Modality === 'SEG' || displaySet.Modality === 'RTSTRUCT') {
+        if (!referencedDisplaySetInstanceUID) {
+          console.warn(
+            'hydrateSecondaryDisplaySet: segmentation has no referenced display set (missing or unresolvable series link)'
+          );
+          return;
+        }
+
         const referencedDisplaySet = displaySetService.getDisplaySetByUID(
           referencedDisplaySetInstanceUID
         );

@@ -3,9 +3,11 @@ import { Types } from '@ohif/core';
 import { cache, metaData } from '@cornerstonejs/core';
 import { segmentation as cornerstoneToolsSegmentation } from '@cornerstonejs/tools';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
-import { adaptersRT, adaptersSEG } from '@cornerstonejs/adapters';
+import { adaptersRT, helpers, adaptersSEG } from '@cornerstonejs/adapters';
 import { createReportDialogPrompt, useUIStateStore } from '@ohif/extension-default';
+import { DicomMetadataStore } from '@ohif/core';
 import { buildFunctionUrl } from '@ohif/app/src/utils/buildFunctionUrl';
+import GlbPreviewDialog from './components/GlbPreviewDialog';
 
 import PROMPT_RESPONSES from '../../default/src/utils/_shared/PROMPT_RESPONSES';
 import {
@@ -34,10 +36,35 @@ const {
   },
 } = adaptersRT;
 
+const { downloadDICOMData } = helpers;
 
 function getAuthHeader(dataSource) {
   const bearer = dataSource?.retrieve?.customClient?.headers?.Authorization;
   return bearer ? { Authorization: bearer } : {};
+}
+
+async function readConvertResponse(response: Response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return response.json();
+  }
+
+  const text = await response.text();
+  return {
+    artifacts: text
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line && !line.toLowerCase().startsWith('uploaded'))
+      .map(blobPath => ({
+        format: blobPath.toLowerCase().endsWith('.glb') ? 'glb' : 'obj',
+        blobPath,
+      })),
+  };
+}
+
+function appendQueryParam(url: string, key: string, value: string): string {
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
 }
 
 /**
@@ -102,7 +129,6 @@ function getVisibleSegmentNumbers(
 const commandsModule = ({
   servicesManager,
   extensionManager,
-  commandsManager,
 }: Types.Extensions.ExtensionParams): Types.Extensions.CommandsModule => {
   const { segmentationService, displaySetService, viewportGridService } =
     servicesManager.services as AppTypes.Services;
@@ -263,11 +289,8 @@ const commandsModule = ({
       const generatedSegmentation = actions.generateSegmentation({
         segmentationId,
       });
-      const storeFn = commandsManager.runCommand('createStoreFunction', {
-        dataSource: 'download',
-        defaultFileName: `${segmentationInOHIF.label}.dcm`,
-      });
-      storeFn(generatedSegmentation.dataset);
+
+      downloadDICOMData(generatedSegmentation.dataset, `${segmentationInOHIF.label}`);
     },
     /**
      * Stores a segmentation based on the provided segmentationId into a specified data source.
@@ -289,10 +312,11 @@ const commandsModule = ({
       }
 
       const { label, predecessorImageId } = segmentation;
+      const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
 
       const {
         value: reportName,
-        dataSourceName,
+        dataSourceName: selectedDataSource,
         series,
         priorSeriesNumber,
         action,
@@ -302,58 +326,50 @@ const commandsModule = ({
         predecessorImageId,
         title: 'Store Segmentation',
         modality,
-        enableDownload: true,
       });
 
-      if (action !== PROMPT_RESPONSES.CREATE_REPORT) {
-        return;
-      }
+      if (action === PROMPT_RESPONSES.CREATE_REPORT) {
+        try {
+          const selectedDataSourceConfig = selectedDataSource
+            ? extensionManager.getDataSources(selectedDataSource)[0]
+            : defaultDataSource;
 
-      const defaultFileName =
-        modality === 'RTSTRUCT'
-          ? `rtss-${segmentationId}.dcm`
-          : `${label || 'segmentation'}.dcm`;
+          const args = {
+            segmentationId,
+            options: {
+              SeriesDescription: series ? undefined : reportName || label || 'Contour Series',
+              SeriesNumber: series ? undefined : 1 + priorSeriesNumber,
+              predecessorImageId: series,
+            },
+          };
+          const generatedDataAsync =
+            (modality === 'SEG' && actions.generateSegmentation(args)) ||
+            (modality === 'RTSTRUCT' && actions.generateContour(args));
+          const generatedData = await generatedDataAsync;
 
-      const storeFn = commandsManager.runCommand('createStoreFunction', {
-        dataSource: dataSourceName,
-        defaultFileName,
-      });
+          if (!generatedData || !generatedData.dataset) {
+            throw new Error('Error during segmentation generation');
+          }
 
-      if (!storeFn) {
-        throw new Error(`No valid store for dataSource: ${dataSourceName}`);
-      }
+          const { dataset: naturalizedReport } = generatedData;
 
-      try {
-        const args = {
-          segmentationId,
-          options: {
-            SeriesDescription: series ? undefined : reportName || label || 'Contour Series',
-            SeriesNumber: series ? undefined : 1 + priorSeriesNumber,
-            predecessorImageId: series,
-          },
-        };
-        const generatedDataAsync =
-          (modality === 'SEG' && actions.generateSegmentation(args)) ||
-          (modality === 'RTSTRUCT' && actions.generateContour(args));
-        const generatedData = await generatedDataAsync;
+          // DCMJS assigns a dummy study id during creation, and this can cause problems, so clearing it out
+          if (naturalizedReport.StudyID === 'No Study ID') {
+            naturalizedReport.StudyID = '';
+          }
 
-        if (!generatedData?.dataset) {
-          throw new Error('Error during segmentation generation');
+          await selectedDataSourceConfig.store.dicom(naturalizedReport);
+
+          // add the information for where we stored it to the instance as well
+          naturalizedReport.wadoRoot = selectedDataSourceConfig.getConfig().wadoRoot;
+
+          DicomMetadataStore.addInstances([naturalizedReport], true);
+
+          return naturalizedReport;
+        } catch (error) {
+          console.debug('Error storing segmentation:', error);
+          throw error;
         }
-
-        const { dataset: naturalizedReport } = generatedData;
-
-        // DCMJS assigns a dummy study id during creation, and this can cause problems, so clearing it out
-        if (naturalizedReport.StudyID === 'No Study ID') {
-          naturalizedReport.StudyID = '';
-        }
-
-        await storeFn(naturalizedReport, {});
-
-        return naturalizedReport;
-      } catch (error) {
-        console.debug('Error storing segmentation:', error);
-        throw error;
       }
     },
 
@@ -386,11 +402,14 @@ const commandsModule = ({
     downloadRTSS: async args => {
       const { dataset } = await actions.generateContour(args);
       const { InstanceNumber: instanceNumber = 1, SeriesInstanceUID: seriesUID } = dataset;
-      const storeFn = commandsManager.runCommand('createStoreFunction', {
-        dataSource: 'download',
-        defaultFileName: `rtss-${seriesUID}-${instanceNumber}.dcm`,
-      });
-      await storeFn(dataset);
+
+      try {
+        //Create a URL for the binary.
+        const filename = `rtss-${seriesUID}-${instanceNumber}.dcm`;
+        downloadDICOMData(dataset, filename);
+      } catch (e) {
+        console.warn(e);
+      }
     },
 
     toggleActiveSegmentationUtility: ({ itemId: buttonId }) => {
@@ -607,6 +626,109 @@ const commandsModule = ({
         uiNotificationService.show({
           title: 'Download Failed',
           message: error.message || 'Failed to download OBJ file',
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    },
+    previewSegmentation3D: async ({ segmentationId, dataSource, noCache = false }) => {
+      const { uiNotificationService, uiDialogService } = servicesManager.services as AppTypes.Services;
+
+      const loadingNotificationId = uiNotificationService.show({
+        title: 'Processing',
+        message: 'Converting segmentation to GLB format...',
+        type: 'info',
+        duration: 0,
+      });
+
+      try {
+        const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
+        if (!segmentationInOHIF) {
+          throw new Error('Segmentation not found');
+        }
+
+        const generatedSegmentation = actions.generateSegmentation({ segmentationId });
+        if (!generatedSegmentation || !generatedSegmentation.dataset) {
+          throw new Error('Failed to generate segmentation dataset.');
+        }
+
+        const dataset = generatedSegmentation.dataset;
+        const dicomBlob = dcmjs.data.datasetToBlob(dataset);
+
+        const formData = new FormData();
+        formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
+        formData.append('format', 'glb');
+        formData.append('response', 'json');
+
+        const selectedSegmentNumbers = getVisibleSegmentNumbers(
+          segmentationId,
+          segmentationService,
+          viewportGridService
+        );
+        if (selectedSegmentNumbers?.length) {
+          formData.append('segments', selectedSegmentNumbers.join(','));
+        }
+
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
+        const baseEndpoint = buildFunctionUrl(config, 'ConvertDicomToObj');
+        const endpoint = noCache
+          ? appendQueryParam(baseEndpoint, 'forceRegenerate', '1')
+          : baseEndpoint;
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            ...getAuthHeader(defaultDataSource),
+          },
+        });
+
+        if (loadingNotificationId) {
+          uiNotificationService.hide(loadingNotificationId);
+        }
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => response.statusText);
+          throw new Error(`Server error: ${response.status} ${errorText}`);
+        }
+
+        const payload = await readConvertResponse(response);
+        const glbArtifacts = (payload?.artifacts || []).filter(
+          item => String(item.format || '').toLowerCase() === 'glb' && item?.url
+        );
+        if (!glbArtifacts.length) {
+          throw new Error('GLB URL is missing in conversion response.');
+        }
+
+        uiDialogService.show({
+          id: 'segmentation-glb-preview',
+          title: 'Preview 3D (GLB)',
+          content: GlbPreviewDialog,
+          shouldCloseOnEsc: true,
+          contentProps: {
+            models: glbArtifacts.map(item => ({
+              url: item.url,
+              label: item.label,
+              segmentNumber: item.segmentNumber,
+            })),
+            title: segmentationInOHIF.label,
+          },
+        });
+
+        uiNotificationService.show({
+          title: 'Ready',
+          message: '3D preview is ready.',
+          type: 'success',
+          duration: 2500,
+        });
+      } catch (error) {
+        if (loadingNotificationId) {
+          uiNotificationService.hide(loadingNotificationId);
+        }
+        uiNotificationService.show({
+          title: 'Preview Failed',
+          message: error.message || 'Failed to preview GLB model',
           type: 'error',
           duration: 5000,
         });
@@ -1559,10 +1681,12 @@ const commandsModule = ({
     toggleActiveSegmentationUtility: actions.toggleActiveSegmentationUtility,
     sendToGlasses: actions.sendToGlasses,
     downloadObj: actions.downloadObj,
+    previewSegmentation3D: actions.previewSegmentation3D,
     segmentByPreset: actions.segmentByPreset,
     magicWandSegmentation: actions.magicWandSegmentation,
     oneClickSegmentation: actions.oneClickSegmentation,
     totalSegmentator: actions.totalSegmentator,
+    totalSpineSegmentator: actions.totalSpineSegmentator,
     // Server-side segmentation helpers
     isSegmentationSaved: actions.isSegmentationSaved,
     runServerSegmentation: actions.runServerSegmentation,
