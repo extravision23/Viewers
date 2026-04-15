@@ -28,7 +28,7 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
         configuration={{
           ...props?.configuration,
         }}
-        segmentationRepresentationType={props?.segmentationRepresentationType}
+        segmentationRepresentationTypes={props?.segmentationRepresentationTypes}
       />
     );
   };
@@ -42,22 +42,23 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
         configuration={{
           ...props?.configuration,
         }}
-        segmentationRepresentationType={props?.segmentationRepresentationType}
+        segmentationRepresentationTypes={props?.segmentationRepresentationTypes}
       />
     );
   };
 
   const wrappedPanelSegmentationWithTools = props => {
     const { t } = useTranslation('SegmentationPanel');
-    const tKey = `${props.segmentationRepresentationType ?? 'Segmentation'} tools`;
+    const tKey = `${props.segmentationRepresentationTypes?.[0] ?? 'Segmentation'} tools`;
     const tValue = t(tKey);
 
-    const isLabelmap = props.segmentationRepresentationType === SegmentationRepresentations.Labelmap;
+    const isLabelmap =
+      props.segmentationRepresentationTypes?.[0] === SegmentationRepresentations.Labelmap;
 
     return (
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <Toolbox
-          buttonSectionId={toolSectionMap[props.segmentationRepresentationType]}
+          buttonSectionId={toolSectionMap[props.segmentationRepresentationTypes?.[0]]}
           title={tValue}
         />
         {isLabelmap && (
@@ -94,7 +95,7 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
           configuration={{
             ...props?.configuration,
           }}
-          segmentationRepresentationType={props?.segmentationRepresentationType}
+          segmentationRepresentationTypes={props?.segmentationRepresentationTypes}
         />
       </div>
     );
@@ -136,7 +137,10 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
       component: props =>
         wrappedPanelSegmentationWithTools({
           ...props,
-          segmentationRepresentationType: SegmentationRepresentations.Labelmap,
+          segmentationRepresentationTypes: [
+            SegmentationRepresentations.Labelmap,
+            SegmentationRepresentations.Surface,
+          ],
         }),
     },
     {
@@ -147,7 +151,7 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
       component: props =>
         wrappedPanelSegmentationWithTools({
           ...props,
-          segmentationRepresentationType: SegmentationRepresentations.Contour,
+          segmentationRepresentationTypes: [SegmentationRepresentations.Contour],
         }),
     },
   ];

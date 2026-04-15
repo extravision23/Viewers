@@ -70,7 +70,7 @@ function Header({
               onClick={onClickReturn}
               data-cy="return-to-work-list"
             >
-              {isReturnEnabled && <Icons.ArrowLeft className="text-primary ml-1 h-7 w-7" />}
+              {isReturnEnabled && <Icons.ArrowLeft className="ml-1 h-7 w-7 text-white" />}
               <div className="ml-1">
                 {WhiteLabeling?.createLogoComponentFn?.(React, props) || (
                   <Icons.ExtraVisionLogoDark className="h-7 w-auto" />
@@ -84,16 +84,16 @@ function Header({
           </div>
           <div className="absolute right-0 top-1/2 flex -translate-y-1/2 select-none items-center">
             {UndoRedo}
-            <div className="border-primary-dark mx-1.5 h-[25px] border-r"></div>
+            <div className="mx-1.5 h-[25px] border-r border-white/25"></div>
             {PatientInfo}
-            <div className="border-primary-dark mx-1.5 h-[25px] border-r"></div>
+            <div className="mx-1.5 h-[25px] border-r border-white/25"></div>
             <div className="flex-shrink-0">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="text-primary hover:bg-primary-dark mt-2 h-full w-full"
+                    className="mt-2 h-full w-full text-white hover:bg-black/20"
                   >
                     <Icons.GearSettings />
                   </Button>
