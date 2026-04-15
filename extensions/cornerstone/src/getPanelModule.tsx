@@ -52,7 +52,8 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
     const tKey = `${props.segmentationRepresentationTypes?.[0] ?? 'Segmentation'} tools`;
     const tValue = t(tKey);
 
-    const isLabelmap = props.segmentationRepresentationType === SegmentationRepresentations.Labelmap;
+    const isLabelmap =
+      props.segmentationRepresentationTypes?.[0] === SegmentationRepresentations.Labelmap;
 
     return (
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">

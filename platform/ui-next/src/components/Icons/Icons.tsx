@@ -219,10 +219,10 @@ import MRDefault from '../../../assets/images/MR-Default.png';
 import MRMIP from '../../../assets/images/MR-MIP.png';
 import MRT2Brain from '../../../assets/images/MR-T2-Brain.png';
 import VolumeRendering from '../../../assets/images/VolumeRendering.png';
-// Custom branding
+// Custom branding — SVG import is bundler-specific: URL string (e.g. Rsbuild) or SVGR component (webpack).
 import ExtraVisionLogo from '../../../assets/images/extravision-logo.png';
-import ExtraVisionLogoLight from '../../../assets/images/extravision-logo-light.svg';
-import ExtraVisionLogoDark from '../../../assets/images/extravision-logo-dark.svg';
+import ExtraVisionLogoLightSvg from '../../../assets/images/extravision-logo-light.svg';
+import ExtraVisionLogoDarkSvg from '../../../assets/images/extravision-logo-dark.svg';
 import ExternalLink from './Sources/ExternalLink';
 import OHIFLogoColorDarkBackground from './Sources/OHIFLogoColorDarkBackground';
 import Magnifier from './Sources/Magnifier';
@@ -250,6 +250,31 @@ const ImageWrapper = ({ src, ...props }: { src: string } & ImageIconProps) => {
     />
   );
 };
+
+/** Rsbuild / asset modules often emit a URL; webpack+SVGR emits a component — support both. */
+function ExtraVisionSvgBrand({
+  imported,
+  alt = '',
+  ...rest
+}: { imported: unknown } & ImageIconProps) {
+  if (typeof imported === 'string') {
+    return (
+      <img
+        src={imported}
+        alt={alt}
+        {...rest}
+      />
+    );
+  }
+  const Svg = imported as React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  return (
+    <Svg
+      role="img"
+      aria-label={alt || 'ExtraVision'}
+      {...(rest as React.SVGProps<SVGSVGElement>)}
+    />
+  );
+}
 
 export const Icons = {
   'CT-AAA': (props: ImageIconProps) => (
@@ -421,14 +446,14 @@ export const Icons = {
     />
   ),
   ExtraVisionLogoLight: (props: ImageIconProps) => (
-    <ImageWrapper
-      src={ExtraVisionLogoLight}
+    <ExtraVisionSvgBrand
+      imported={ExtraVisionLogoLightSvg}
       {...props}
     />
   ),
   ExtraVisionLogoDark: (props: ImageIconProps) => (
-    <ImageWrapper
-      src={ExtraVisionLogoDark}
+    <ExtraVisionSvgBrand
+      imported={ExtraVisionLogoDarkSvg}
       {...props}
     />
   ),

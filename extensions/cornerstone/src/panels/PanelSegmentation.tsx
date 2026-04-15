@@ -285,7 +285,7 @@ export default function PanelSegmentation({
   };
 
   const renderPreviewControls = () => {
-    if (segmentationRepresentationType !== SegmentationRepresentations.Labelmap) {
+    if (segmentationRepresentationTypes?.[0] !== SegmentationRepresentations.Labelmap) {
       return null;
     }
 
