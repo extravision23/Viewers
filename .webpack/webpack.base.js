@@ -51,6 +51,13 @@ const defineValues = {
   'process.env.LOCIZE_API_KEY': JSON.stringify(process.env.LOCIZE_API_KEY || ''),
   'process.env.REACT_APP_I18N_DEBUG': JSON.stringify(process.env.REACT_APP_I18N_DEBUG || ''),
   'process.env.TEST_ENV': JSON.stringify(process.env.TEST_ENV || ''),
+  /**
+   * onnxruntime-web (`onnxruntime-web/webgpu`, pulled in by @cornerstonejs/ai) touches `__filename`
+   * in Node-oriented branches. In the browser those identifiers are missing → ReferenceError.
+   * Compile-time literals satisfy the references; WASM paths are set via `ort.env.wasm.wasmPaths`.
+   */
+  __filename: JSON.stringify(''),
+  __dirname: JSON.stringify(''),
 };
 
 // Only redefine updated values.  This avoids warning messages in the logs
