@@ -174,6 +174,8 @@ const segmentationRepresentationModifiedCallback = async (
         config: blendMode ? { blendMode } : undefined,
       });
 
+      viewport.render?.();
+
       console.debug('[Hydrator] Successfully added representation:', {
         targetViewportId,
         segmentationId,

@@ -220,18 +220,26 @@ async function _loadSegments({
 
   // Todo: what should be defaults here
   const tolerance = 0.001;
-  eventTarget.addEventListener(Enums.Events.SEGMENTATION_LOAD_PROGRESS, evt => {
+  const onSegmentationLoadProgress = evt => {
     const { percentComplete } = evt.detail;
     segmentationService._broadcastEvent(segmentationService.EVENTS.SEGMENT_LOADING_COMPLETE, {
       percentComplete,
+      numSegments: segDisplaySet?.segMetadata?.data?.length,
     });
-  });
+  };
 
-  const results = await adaptersSEG.Cornerstone3D.Segmentation.createFromDICOMSegBuffer(
-    imageIds,
-    arrayBuffer,
-    { metadataProvider: metaData, tolerance }
-  );
+  eventTarget.addEventListener(Enums.Events.SEGMENTATION_LOAD_PROGRESS, onSegmentationLoadProgress);
+
+  let results;
+  try {
+    results = await adaptersSEG.Cornerstone3D.Segmentation.createFromDICOMSegBuffer(
+      imageIds,
+      arrayBuffer,
+      { metadataProvider: metaData, tolerance }
+    );
+  } finally {
+    eventTarget.removeEventListener(Enums.Events.SEGMENTATION_LOAD_PROGRESS, onSegmentationLoadProgress);
+  }
 
   let usedRecommendedDisplayCIELabValue = true;
   results.segMetadata.data.forEach((data, i) => {

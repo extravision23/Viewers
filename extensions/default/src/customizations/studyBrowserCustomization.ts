@@ -1,3 +1,4 @@
+import React from 'react';
 import { utils } from '@ohif/core';
 import i18n from '@ohif/i18n';
 import { isMprInFlight } from '../utils/mprDeriveState';
@@ -64,6 +65,74 @@ function promptSegmentationHydration({
       },
     });
   });
+}
+
+function createSegHydrationProgressDialog({
+  servicesManager,
+  viewportId,
+  segDisplaySet,
+}: {
+  servicesManager: AppTypes.ServicesManager;
+  viewportId: string;
+  segDisplaySet: AppTypes.DisplaySet;
+}) {
+  const { uiViewportDialogService, segmentationService, customizationService } = servicesManager.services;
+  const LoadingIndicatorTotalPercent = customizationService.getCustomization(
+    'ui.loadingIndicatorTotalPercent'
+  );
+
+  if (!LoadingIndicatorTotalPercent) {
+    return () => {};
+  }
+
+  const progressState = {
+    percentComplete: null,
+    totalSegments: null,
+  };
+
+  const showProgressDialog = () => {
+    uiViewportDialogService.show({
+      id: 'segHydrationProgress',
+      viewportId,
+      type: 'info',
+      message: React.createElement(LoadingIndicatorTotalPercent, {
+        className: 'h-56 w-full',
+        totalNumbers: progressState.totalSegments,
+        percentComplete: progressState.percentComplete,
+        loadingText: 'Loading SEG...',
+      }),
+      actions: [],
+      onSubmit: () => {},
+      onOutsideClick: () => {},
+      onKeyPress: () => {},
+    });
+  };
+
+  showProgressDialog();
+
+  const onProgress = segmentationService.subscribe(
+    segmentationService.EVENTS.SEGMENT_LOADING_COMPLETE,
+    ({ percentComplete, numSegments }) => {
+      progressState.percentComplete = percentComplete;
+      progressState.totalSegments = numSegments ?? progressState.totalSegments;
+      showProgressDialog();
+    }
+  );
+
+  const onComplete = segmentationService.subscribe(
+    segmentationService.EVENTS.SEGMENTATION_LOADING_COMPLETE,
+    evt => {
+      if (evt.segDisplaySet?.displaySetInstanceUID === segDisplaySet.displaySetInstanceUID) {
+        uiViewportDialogService.hide();
+      }
+    }
+  );
+
+  return () => {
+    onProgress.unsubscribe();
+    onComplete.unsubscribe();
+    uiViewportDialogService.hide();
+  };
 }
 
 const isEligibleForMpr = displaySet => {
@@ -220,10 +289,25 @@ export default {
                 return;
               }
 
-              await commandsManager.runCommand('hydrateSecondaryDisplaySet', {
-                displaySet: clickedDisplaySet,
-                viewportId,
-              });
+              const stopProgressDialog =
+                clickedDisplaySet.Modality === 'SEG'
+                  ? createSegHydrationProgressDialog({
+                      servicesManager,
+                      viewportId,
+                      segDisplaySet: clickedDisplaySet,
+                    })
+                  : () => {};
+
+              try {
+                // Let the confirm dialog close and UI settle before starting hydration.
+                await new Promise(resolve => window.setTimeout(resolve, 0));
+                await commandsManager.runCommand('hydrateSecondaryDisplaySet', {
+                  displaySet: clickedDisplaySet,
+                  viewportId,
+                });
+              } finally {
+                stopProgressDialog();
+              }
             } catch (error) {
               console.warn(error);
               uiNotificationService.show({

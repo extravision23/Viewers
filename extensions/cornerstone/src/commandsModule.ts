@@ -275,6 +275,108 @@ async function askUseCurrentSeriesForSegmentation(
   });
 }
 
+const SEG_REFERENCE_RESOLVE_TIMEOUT_MS = 1500;
+const SEG_REFERENCE_RESOLVE_POLL_MS = 100;
+const VIEWPORT_GRID_UPDATE_TIMEOUT_MS = 1500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function waitForViewportGridUpdate({
+  viewportGridService,
+  viewportIds,
+  timeoutMs = VIEWPORT_GRID_UPDATE_TIMEOUT_MS,
+}: {
+  viewportGridService: AppTypes.ViewportGridService;
+  viewportIds: string[];
+  timeoutMs?: number;
+}): Promise<void> {
+  const trackedViewportIds = Array.from(new Set(viewportIds.filter(Boolean)));
+
+  if (!trackedViewportIds.length) {
+    return Promise.resolve();
+  }
+
+  return new Promise(resolve => {
+    let settled = false;
+    const seenViewportIds = new Set<string>();
+
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      subscription.unsubscribe();
+      window.clearTimeout(timeoutId);
+      resolve();
+    };
+
+    const markViewportIds = viewports => {
+      viewports?.forEach(viewport => {
+        if (trackedViewportIds.includes(viewport.viewportId)) {
+          seenViewportIds.add(viewport.viewportId);
+        }
+      });
+
+      if (trackedViewportIds.every(viewportId => seenViewportIds.has(viewportId))) {
+        finish();
+      }
+    };
+
+    const subscription = viewportGridService.subscribe(
+      viewportGridService.EVENTS.GRID_STATE_CHANGED,
+      ({ viewports }) => {
+        markViewportIds(viewports);
+      }
+    );
+
+    const timeoutId = window.setTimeout(finish, timeoutMs);
+  });
+}
+
+async function waitForReferencedDisplaySetUID({
+  displaySet,
+  displaySetService,
+  timeoutMs = SEG_REFERENCE_RESOLVE_TIMEOUT_MS,
+  pollMs = SEG_REFERENCE_RESOLVE_POLL_MS,
+}: {
+  displaySet: AppTypes.DisplaySet & { referencedSeriesInstanceUID?: string };
+  displaySetService: AppTypes.DisplaySetService;
+  timeoutMs?: number;
+  pollMs?: number;
+}): Promise<string | null> {
+  let referencedDisplaySetInstanceUID = displaySet.referencedDisplaySetInstanceUID;
+
+  if (referencedDisplaySetInstanceUID) {
+    return referencedDisplaySetInstanceUID;
+  }
+
+  const referencedSeriesInstanceUID = displaySet.referencedSeriesInstanceUID;
+  if (!referencedSeriesInstanceUID) {
+    return null;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (!referencedDisplaySetInstanceUID && Date.now() < deadline) {
+    const matchedDisplaySets = displaySetService.getDisplaySetsForSeries(referencedSeriesInstanceUID);
+    if (matchedDisplaySets?.length) {
+      referencedDisplaySetInstanceUID = matchedDisplaySets[0].displaySetInstanceUID;
+      displaySet.referencedDisplaySetInstanceUID = referencedDisplaySetInstanceUID;
+      displaySet.isReconstructable = matchedDisplaySets[0].isReconstructable;
+      break;
+    }
+
+    await sleep(pollMs);
+    referencedDisplaySetInstanceUID = displaySet.referencedDisplaySetInstanceUID;
+  }
+
+  return referencedDisplaySetInstanceUID || null;
+}
+
 function commandsModule({
   servicesManager,
   commandsManager,
@@ -593,11 +695,17 @@ function commandsModule({
       };
 
       if (displaySet.Modality === 'SEG' || displaySet.Modality === 'RTSTRUCT') {
+        if (displaySet.Modality === 'SEG' && !referencedDisplaySetInstanceUID) {
+          referencedDisplaySetInstanceUID = await waitForReferencedDisplaySetUID({
+            displaySet: displaySet as AppTypes.DisplaySet & { referencedSeriesInstanceUID?: string },
+            displaySetService,
+          });
+        }
+
         if (!referencedDisplaySetInstanceUID) {
-          console.warn(
-            'hydrateSecondaryDisplaySet: segmentation has no referenced display set (missing or unresolvable series link)'
+          throw new Error(
+            'hydrateSecondaryDisplaySet: segmentation has no referenced display set (missing or unresolved series link)'
           );
-          return;
         }
 
         const referencedDisplaySet = displaySetService.getDisplaySetByUID(
@@ -605,22 +713,23 @@ function commandsModule({
         );
 
         if (!referencedDisplaySet) {
-          console.warn(
+          throw new Error(
             'hydrateSecondaryDisplaySet: referenced display set not found for segmentation'
           );
-          return;
         }
 
 
+        let hydratedSegmentationId = displaySet.displaySetInstanceUID;
+
         if (displaySet.Modality === 'SEG') {
-          try {
-            await commandsManager.runCommand('hydrateSegmentationFromDisplaySet', {
+          const returnedSegmentationId = await commandsManager.runCommand(
+            'hydrateSegmentationFromDisplaySet',
+            {
               segDisplaySet: displaySet,
               viewportId,
-            });
-          } catch (error) {
-            console.warn('Failed to hydrate segmentation from SEG display set', error);
-          }
+            }
+          );
+          hydratedSegmentationId = returnedSegmentationId || hydratedSegmentationId;
         }
 
         // Try to use the series that was active in the viewport at the moment of
@@ -703,7 +812,7 @@ function commandsModule({
 
             const existing = segmentationPresentationStore[presentationId] || [];
             const alreadyStored = existing.some(
-              item => item.segmentationId === displaySet.displaySetInstanceUID && item.type === segmentationType
+              item => item.segmentationId === hydratedSegmentationId && item.type === segmentationType
             );
 
             if (alreadyStored) {
@@ -711,7 +820,7 @@ function commandsModule({
             }
 
             addSegmentationPresentationItem(presentationId, {
-              segmentationId: displaySet.displaySetInstanceUID,
+              segmentationId: hydratedSegmentationId,
               hydrated: true,
               type: segmentationType,
             });
@@ -735,7 +844,7 @@ function commandsModule({
           ? currentDisplaySetUIDs
           : [targetDisplaySet.displaySetInstanceUID, ...currentDisplaySetUIDs];
 
-        const results = commandsManager.runCommand('loadSegmentationDisplaySetsForViewport', {
+        const results = await commandsManager.runCommand('loadSegmentationDisplaySetsForViewport', {
           viewportId,
           displaySetInstanceUIDs: nextDisplaySetUIDs,
         });
@@ -745,14 +854,35 @@ function commandsModule({
         // contain the target (primary) display set. This avoids relying solely
         // on presentation re-application, which may not run if viewports don't
         // refresh after hydration.
+        const ensureSegmentsVisible = (
+          targetViewportId: string,
+          segmentationId: string,
+          type: csToolsEnums.SegmentationRepresentations
+        ) => {
+          const segmentation = segmentationService.getSegmentation(segmentationId);
+          const segmentIndices = Object.keys(segmentation?.segments || {})
+            .map(value => parseInt(value, 10))
+            .filter(index => Number.isFinite(index) && index > 0);
+
+          segmentIndices.forEach(segmentIndex => {
+            segmentationService.setSegmentVisibility(
+              targetViewportId,
+              segmentationId,
+              segmentIndex,
+              true,
+              type
+            );
+          });
+        };
+
         try {
           const { viewports } = viewportGridService.getState();
-          const segmentationId = displaySet.displaySetInstanceUID;
+          const segmentationId = hydratedSegmentationId;
 
-          viewports.forEach((vp, vpId) => {
+          for (const [vpId, vp] of viewports.entries()) {
             const displaySetUIDs = vp.displaySetInstanceUIDs || [];
             if (!displaySetUIDs.includes(targetDisplaySet.displaySetInstanceUID)) {
-              return;
+              continue;
             }
 
             const isSegOnlyViewport =
@@ -760,12 +890,12 @@ function commandsModule({
               displaySetUIDs.every(uid => displaySetService.getDisplaySetByUID(uid)?.Modality === 'SEG');
 
             if (isSegOnlyViewport) {
-              return;
+              continue;
             }
 
             const csViewport = cornerstoneViewportService.getCornerstoneViewport(vpId);
             if (!csViewport) {
-              return;
+              continue;
             }
 
             const repType =
@@ -780,7 +910,7 @@ function commandsModule({
             });
 
             if (!existing.length) {
-              segmentationService.addSegmentationRepresentation(vpId, {
+              await segmentationService.addSegmentationRepresentation(vpId, {
                 segmentationId,
                 type: repType,
               });
@@ -789,7 +919,10 @@ function commandsModule({
             if (vpId === viewportId) {
               segmentationService.setActiveSegmentation(vpId, segmentationId);
             }
-          });
+
+            ensureSegmentsVisible(vpId, segmentationId, repType);
+            csViewport.render?.();
+          }
         } catch (error) {
           console.warn('Failed to ensure segmentation representations after hydration', error);
         }
@@ -801,11 +934,11 @@ function commandsModule({
         // non‑referenced series automatically.
         if (appliedToOverrideSeries && segmentationType != null) {
           try {
-            segmentationService.addSegmentationRepresentation(viewportId, {
-              segmentationId: displaySet.displaySetInstanceUID,
+            await segmentationService.addSegmentationRepresentation(viewportId, {
+              segmentationId: hydratedSegmentationId,
               type: segmentationType,
             });
-            segmentationService.setActiveSegmentation(viewportId, displaySet.displaySetInstanceUID);
+            segmentationService.setActiveSegmentation(viewportId, hydratedSegmentationId);
           } catch (error) {
             console.warn(
               'Failed to attach segmentation representation to override series viewport',
@@ -817,18 +950,18 @@ function commandsModule({
         // Ensure segmentation representations exist for SEG on all viewports
         // that include the target display set (e.g., MPR viewports).
         if (displaySet.Modality === 'SEG') {
-          const segmentationId = displaySet.displaySetInstanceUID;
+          const segmentationId = hydratedSegmentationId;
           const { viewports } = viewportGridService.getState();
 
-          viewports.forEach((vp, vpId) => {
+          for (const [vpId, vp] of viewports.entries()) {
             const displaySetUIDs = vp.displaySetInstanceUIDs || [];
             if (!displaySetUIDs.includes(targetDisplaySet.displaySetInstanceUID)) {
-              return;
+              continue;
             }
 
             const csViewport = cornerstoneViewportService.getCornerstoneViewport(vpId);
             if (!csViewport) {
-              return;
+              continue;
             }
 
             const repType =
@@ -842,7 +975,7 @@ function commandsModule({
             });
 
             if (!existing.length) {
-              segmentationService.addSegmentationRepresentation(vpId, {
+              await segmentationService.addSegmentationRepresentation(vpId, {
                 segmentationId,
                 type: repType,
               });
@@ -851,7 +984,35 @@ function commandsModule({
             if (vpId === viewportId) {
               segmentationService.setActiveSegmentation(vpId, segmentationId);
             }
-          });
+
+            ensureSegmentsVisible(vpId, segmentationId, repType);
+            csViewport.render?.();
+          }
+
+          // Fail-safe: always ensure the requested viewport has the hydrated segmentation
+          // representation, even if HP-based viewport matching did not include it.
+          const requestedViewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+          if (requestedViewport) {
+            const requestedRepType =
+              requestedViewport.type === CoreEnums.ViewportType.VOLUME_3D
+                ? SegmentationRepresentations.Surface
+                : SegmentationRepresentations.Labelmap;
+            const requestedExisting = segmentationService.getSegmentationRepresentations(viewportId, {
+              segmentationId,
+              type: requestedRepType,
+            });
+
+            if (!requestedExisting.length) {
+              await segmentationService.addSegmentationRepresentation(viewportId, {
+                segmentationId,
+                type: requestedRepType,
+              });
+            }
+
+            segmentationService.setActiveSegmentation(viewportId, segmentationId);
+            ensureSegmentsVisible(viewportId, segmentationId, requestedRepType);
+            requestedViewport.render?.();
+          }
         }
 
         const disableEditing = customizationService.getCustomization(
@@ -861,7 +1022,7 @@ function commandsModule({
           const segmentationRepresentations = segmentationService.getSegmentationRepresentations(
             viewportId,
             {
-              segmentationId: displaySet.displaySetInstanceUID,
+              segmentationId: hydratedSegmentationId,
             }
           );
 
@@ -2381,7 +2542,7 @@ function commandsModule({
         });
       });
 
-      viewportGridService.setDisplaySetsForViewports(viewportsToUpdate);
+      return viewportGridService.setDisplaySetsForViewports(viewportsToUpdate);
     },
     undo: () => {
       DefaultHistoryMemo.undo();
@@ -2600,7 +2761,7 @@ function commandsModule({
       }
       segmentationService.addSegment(activeSegmentation.segmentationId);
     },
-    loadSegmentationDisplaySetsForViewport: ({ viewportId, displaySetInstanceUIDs }) => {
+    loadSegmentationDisplaySetsForViewport: async ({ viewportId, displaySetInstanceUIDs }) => {
       const updatedViewports = getUpdatedViewportsForSegmentation({
         viewportId,
         servicesManager,
@@ -2650,9 +2811,16 @@ function commandsModule({
         };
       });
 
-      actions.setDisplaySetsForViewports({
+      const viewportGridUpdatePromise = waitForViewportGridUpdate({
+        viewportGridService,
+        viewportIds: viewportsToUpdate.map(viewport => viewport.viewportId),
+      });
+
+      await actions.setDisplaySetsForViewports({
         viewportsToUpdate,
       });
+
+      await viewportGridUpdatePromise;
     },
     setViewportOrientation: ({ viewportId, orientation }) => {
       const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
