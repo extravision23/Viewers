@@ -1,4 +1,4 @@
-import { checkForScreenshot, screenShotPaths, test, visitStudy } from './utils';
+import { checkForScreenshot, expect, screenShotPaths, test, visitStudy } from './utils';
 import { press } from './utils/keyboardUtils';
 
 test.beforeEach(async ({ page }) => {
@@ -121,4 +121,89 @@ test('should allow editing of label map segmentations when panelSegmentation.dis
     page,
     screenShotPaths.labelMapSegLocking.globalUnlockedSegPostEdit
   );
+});
+
+test('should lock hidden segments only while eraser is active', async ({
+  page,
+  DOMOverlayPageObject,
+  leftPanelPageObject,
+  rightPanelPageObject,
+}) => {
+  await page.evaluate(() => {
+    window.services.customizationService.setGlobalCustomization('panelSegmentation.disableEditing', {
+      $set: false,
+    });
+  });
+
+  await rightPanelPageObject.labelMapSegmentationPanel.select();
+  await leftPanelPageObject.loadSeriesByModality('SEG');
+  await page.waitForTimeout(5000);
+  await DOMOverlayPageObject.viewport.segmentationHydration.yes.click();
+  await page.waitForTimeout(5000);
+
+  // Ensure segment 1 starts unlocked so we can verify temporary lock/unlock behavior.
+  await page.evaluate(() => {
+    const { viewportGridService, segmentationService } = window.services;
+    const viewportId = viewportGridService.getActiveViewportId();
+    const activeSegmentation = segmentationService.getActiveSegmentation(viewportId);
+    segmentationService.setSegmentLocked(activeSegmentation.segmentationId, 1, false);
+  });
+
+  await rightPanelPageObject.labelMapSegmentationPanel.panel.nthSegment(0).toggleVisibility();
+  await rightPanelPageObject.labelMapSegmentationPanel.tools.eraser.click();
+
+  const isHiddenSegmentLockedOnEraser = await page.evaluate(() => {
+    const { viewportGridService, segmentationService } = window.services;
+    const viewportId = viewportGridService.getActiveViewportId();
+    const activeSegmentation = segmentationService.getActiveSegmentation(viewportId);
+    return Boolean(segmentationService.getSegmentation(activeSegmentation.segmentationId)?.segments?.[1]?.locked);
+  });
+  expect(isHiddenSegmentLockedOnEraser).toBe(true);
+
+  await rightPanelPageObject.labelMapSegmentationPanel.tools.brush.click();
+
+  const isHiddenSegmentRestoredAfterSwitch = await page.evaluate(() => {
+    const { viewportGridService, segmentationService } = window.services;
+    const viewportId = viewportGridService.getActiveViewportId();
+    const activeSegmentation = segmentationService.getActiveSegmentation(viewportId);
+    return Boolean(segmentationService.getSegmentation(activeSegmentation.segmentationId)?.segments?.[1]?.locked);
+  });
+  expect(isHiddenSegmentRestoredAfterSwitch).toBe(false);
+});
+
+test('should lock segment immediately when hidden during active eraser', async ({
+  page,
+  DOMOverlayPageObject,
+  leftPanelPageObject,
+  rightPanelPageObject,
+}) => {
+  await page.evaluate(() => {
+    window.services.customizationService.setGlobalCustomization('panelSegmentation.disableEditing', {
+      $set: false,
+    });
+  });
+
+  await rightPanelPageObject.labelMapSegmentationPanel.select();
+  await leftPanelPageObject.loadSeriesByModality('SEG');
+  await page.waitForTimeout(5000);
+  await DOMOverlayPageObject.viewport.segmentationHydration.yes.click();
+  await page.waitForTimeout(5000);
+
+  await page.evaluate(() => {
+    const { viewportGridService, segmentationService } = window.services;
+    const viewportId = viewportGridService.getActiveViewportId();
+    const activeSegmentation = segmentationService.getActiveSegmentation(viewportId);
+    segmentationService.setSegmentLocked(activeSegmentation.segmentationId, 1, false);
+  });
+
+  await rightPanelPageObject.labelMapSegmentationPanel.tools.eraser.click();
+  await rightPanelPageObject.labelMapSegmentationPanel.panel.nthSegment(0).toggleVisibility();
+
+  const isHiddenSegmentLocked = await page.evaluate(() => {
+    const { viewportGridService, segmentationService } = window.services;
+    const viewportId = viewportGridService.getActiveViewportId();
+    const activeSegmentation = segmentationService.getActiveSegmentation(viewportId);
+    return Boolean(segmentationService.getSegmentation(activeSegmentation.segmentationId)?.segments?.[1]?.locked);
+  });
+  expect(isHiddenSegmentLocked).toBe(true);
 });

@@ -326,9 +326,21 @@ const DataRowComponent = React.forwardRef<HTMLDivElement, DataRowProps>(
               {isVisible ? <Icons.Hide className="h-6 w-6" /> : <Icons.Show className="h-6 w-6" />}
             </Button>
 
-            {/* Lock Icon (if needed) */}
+            {/* Lock Icon (click to unlock) */}
             {isLocked && !disableEditing && (
-              <Icons.Lock className="text-muted-foreground h-6 w-6" />
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-6 w-6"
+                aria-label={t('Unlock')}
+                dataCY="data-row-lock-toggle"
+                onClick={e => {
+                  e.stopPropagation();
+                  onToggleLocked(e);
+                }}
+              >
+                <Icons.Lock className="text-muted-foreground h-6 w-6" />
+              </Button>
             )}
 
             {/* Status Components */}

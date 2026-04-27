@@ -418,6 +418,89 @@ function commandsModule({
     'SplineROI',
     'LivewireContour',
   ]);
+  const ERASER_TOOL_NAMES = new Set(['CircularEraser', 'SphereEraser']);
+
+  function _getActiveLabelmapSegmentationId(viewportId: string): string | null {
+    const activeSegmentation = segmentationService.getActiveSegmentation(viewportId);
+    if (!activeSegmentation) {
+      return null;
+    }
+
+    const { segmentationId } = activeSegmentation;
+    if (!segmentationId) {
+      return null;
+    }
+
+    const labelmapRepresentations = segmentationService.getSegmentationRepresentations(viewportId, {
+      segmentationId,
+      type: SegmentationRepresentations.Labelmap,
+    });
+    if (!labelmapRepresentations.length) {
+      return null;
+    }
+
+    return segmentationId;
+  }
+
+  function _setSegmentLock(segmentationId: string, segmentIndex: number, isLocked: boolean) {
+    segmentationService.setSegmentLocked(segmentationId, segmentIndex, isLocked);
+  }
+
+  function _lockHiddenSegmentsForEraser(viewportId: string) {
+    const segmentationId = _getActiveLabelmapSegmentationId(viewportId);
+    if (!segmentationId) {
+      return;
+    }
+
+    const activeSegmentation = segmentationService.getActiveSegmentation(viewportId);
+    if (!activeSegmentation) {
+      return;
+    }
+
+    const segmentIndices = Object.keys(activeSegmentation.segments || {})
+      .map(value => parseInt(value, 10))
+      .filter(Number.isFinite);
+
+    if (!segmentIndices.length) {
+      return;
+    }
+
+    segmentIndices.forEach(segmentIndex => {
+      const isVisible = segmentation.config.visibility.getSegmentIndexVisibility(
+        viewportId,
+        {
+          segmentationId,
+          type: SegmentationRepresentations.Labelmap,
+        },
+        segmentIndex
+      );
+
+      if (isVisible) {
+        return;
+      }
+
+      _setSegmentLock(segmentationId, segmentIndex, true);
+    });
+  }
+
+  function _unlockAllSegmentsForViewport(viewportId: string) {
+    const segmentationId = _getActiveLabelmapSegmentationId(viewportId);
+    if (!segmentationId) {
+      return;
+    }
+
+    const activeSegmentation = segmentationService.getActiveSegmentation(viewportId);
+    if (!activeSegmentation?.segments) {
+      return;
+    }
+
+    Object.keys(activeSegmentation.segments)
+      .map(value => parseInt(value, 10))
+      .filter(Number.isFinite)
+      .forEach(segmentIndex => {
+        _setSegmentLock(segmentationId, segmentIndex, false);
+      });
+  }
 
   const PLANAR_EPSILON = 1e-3;
   function _isObliquePlanarViewport(viewport: any) {
@@ -1747,6 +1830,16 @@ function commandsModule({
         return;
       }
 
+      const viewportIds = toolGroup.getViewportIds();
+      const isEraserTool = ERASER_TOOL_NAMES.has(toolName);
+      viewportIds.forEach(viewportId => {
+        if (isEraserTool) {
+          _lockHiddenSegmentsForEraser(viewportId);
+        } else {
+          _unlockAllSegmentsForViewport(viewportId);
+        }
+      });
+
       const activeToolName = toolGroup.getActivePrimaryMouseButtonTool();
 
       if (activeToolName) {
@@ -2322,12 +2415,32 @@ function commandsModule({
      */
     toggleSegmentVisibilityCommand: ({ segmentationId, segmentIndex, type }) => {
       const { segmentationService, viewportGridService } = servicesManager.services;
-      segmentationService.toggleSegmentVisibility(
-        viewportGridService.getActiveViewportId(),
-        segmentationId,
-        segmentIndex,
-        type
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      segmentationService.toggleSegmentVisibility(activeViewportId, segmentationId, segmentIndex, type);
+
+      const toolGroup = toolGroupService.getToolGroupForViewport(activeViewportId);
+      const activeToolName = toolGroup?.getActivePrimaryMouseButtonTool();
+      const isEraserActive = activeToolName && ERASER_TOOL_NAMES.has(activeToolName);
+
+      const isVisible = segmentation.config.visibility.getSegmentIndexVisibility(
+        activeViewportId,
+        {
+          segmentationId,
+          type: type ?? SegmentationRepresentations.Labelmap,
+        },
+        segmentIndex
       );
+
+      if (isVisible) {
+        _setSegmentLock(segmentationId, segmentIndex, false);
+        return;
+      }
+
+      if (!isEraserActive) {
+        return;
+      }
+
+      _setSegmentLock(segmentationId, segmentIndex, true);
     },
 
     /**
@@ -2337,7 +2450,7 @@ function commandsModule({
      */
     toggleSegmentLockCommand: ({ segmentationId, segmentIndex }) => {
       const { segmentationService } = servicesManager.services;
-      segmentationService.toggleSegmentLocked(segmentationId, segmentIndex);
+      segmentationService.setSegmentLocked(segmentationId, segmentIndex, false);
     },
 
     /**
