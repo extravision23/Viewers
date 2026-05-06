@@ -1075,6 +1075,65 @@ const commandsModule = ({
       }
     },
 
+    vesselSegmentator: async ({
+      studyInstanceUID,
+      seriesInstanceUID,
+      taskName,
+      dataSource,
+      viewportId,
+    }) => {
+      try {
+        const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+        const config = defaultDataSource.getConfig();
+        const url = buildFunctionUrl(config, 'VesselSegmentation');
+        let segmentationSeriesInstanceUID;
+        try {
+          const result = await getActiveSegmentationSeriesForServerCall({
+            viewportId,
+            servicesManager,
+            extensionManager,
+            storeSegmentationAction: params => actions.storeSegmentation(params),
+          });
+          segmentationSeriesInstanceUID = result.segmentationSeriesInstanceUID;
+        } catch (error) {
+          if (error instanceof UserCancelledError) {
+            console.log('User cancelled segmentation save, aborting server call');
+            return null;
+          }
+          throw error;
+        }
+
+        const payload: any = {
+          studyId: studyInstanceUID,
+          seriesId: seriesInstanceUID,
+          taskName,
+        };
+
+        if (segmentationSeriesInstanceUID) {
+          payload.segmentationSeriesInstanceUID = segmentationSeriesInstanceUID;
+        }
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader(defaultDataSource),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(`Status ${response.status}${text ? `: ${text}` : ''}`);
+        }
+
+        return { success: true };
+      } catch (e) {
+        console.error('Error in vesselSegmentator:', e);
+        throw e;
+      }
+    },
+
     /**
      * Helper: Check if a segmentation is saved (has SeriesInstanceUID and is not madeInClient)
      * @param segmentationId - The segmentation ID to check
@@ -1687,6 +1746,7 @@ const commandsModule = ({
     oneClickSegmentation: actions.oneClickSegmentation,
     totalSegmentator: actions.totalSegmentator,
     totalSpineSegmentator: actions.totalSpineSegmentator,
+    vesselSegmentator: actions.vesselSegmentator,
     // Server-side segmentation helpers
     isSegmentationSaved: actions.isSegmentationSaved,
     runServerSegmentation: actions.runServerSegmentation,
