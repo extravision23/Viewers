@@ -154,10 +154,12 @@ export function useViewportDisplaySets(
     if (!includeOverlay) {
       return [];
     }
-    return segmentationRepresentations.map(repr => {
-      const displaySet = displaySetService.getDisplaySetByUID(repr.segmentationId);
-      return displaySet;
-    });
+    return segmentationRepresentations
+      .map(repr => {
+        const displaySet = displaySetService.getDisplaySetByUID(repr.segmentationId);
+        return displaySet;
+      })
+      .filter(Boolean);
   }, [includeOverlay, segmentationRepresentations, displaySetService]);
 
   const overlayDisplaySetUIDs = useMemo(() => {
@@ -172,12 +174,16 @@ export function useViewportDisplaySets(
     if (!needsEnhancedDisplaySets) {
       return { viewportDisplaySets: [], enhancedDisplaySets: [] };
     }
-    return (
+    const enhanced = (
       getEnhancedDisplaySets({
         viewportId: viewportIdToUse,
         services: { displaySetService, viewportGridService },
       }) || { viewportDisplaySets: [], enhancedDisplaySets: [] }
     );
+    return {
+      viewportDisplaySets: (enhanced.viewportDisplaySets || []).filter(Boolean),
+      enhancedDisplaySets: (enhanced.enhancedDisplaySets || []).filter(Boolean),
+    };
   }, [viewportIdToUse, displaySetService, viewportGridService, needsEnhancedDisplaySets]);
 
   const backgroundDisplaySet = useMemo(

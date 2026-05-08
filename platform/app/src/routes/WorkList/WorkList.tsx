@@ -289,8 +289,8 @@ function WorkList({
     const mrSeries = seriesInStudiesMap.get(selectedMRStudy) || [];
 
     // Filter CT and MR series using fusion suitability rules
-    const filteredCTSeries = ctSeries; //.filter(s => isSeriesValidForFusion(s, 'CT', selectedCTStudy));
-    const filteredMRSeries = mrSeries; //.filter(s => isSeriesValidForFusion(s, 'MR', selectedMRStudy));
+    const filteredCTSeries = ctSeries.filter(s => isSeriesValidForFusion(s, 'CT', selectedCTStudy));
+    const filteredMRSeries = mrSeries.filter(s => isSeriesValidForFusion(s, 'MR', selectedMRStudy));
 
     // Check if we need to show the modal (more than one CT or MR series)
     if (filteredCTSeries.length > 1 || filteredMRSeries.length > 1) {
