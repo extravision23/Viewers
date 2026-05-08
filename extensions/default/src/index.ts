@@ -38,6 +38,13 @@ import { Toolbox } from './utils';
 import MoreDropdownMenu from './Components/MoreDropdownMenu';
 import requestDisplaySetCreationForStudy from './Panels/requestDisplaySetCreationForStudy';
 import { Toolbar } from './Toolbar/Toolbar';
+import {
+  useSegMergeSelection,
+  getSegMergeSelectionSnapshot,
+  toggleSegMergeDisplaySet,
+  clearSegMergeSelection,
+  subscribeSegMergeSelection,
+} from './segMergeSelectionStore';
 
 const defaultExtension: Types.Extensions.Extension = {
   /**
@@ -52,6 +59,7 @@ const defaultExtension: Types.Extensions.Extension = {
     useHangingProtocolStageIndexStore.getState().clearHangingProtocolStageIndexMap();
     useToggleHangingProtocolStore.getState().clearToggleHangingProtocol();
     useViewportsByPositionStore.getState().clearViewportsByPosition();
+    clearSegMergeSelection();
   },
   getDataSourcesModule,
   getViewportModule,
@@ -106,4 +114,9 @@ export {
   callInputDialog,
   createReportDialogPrompt,
   Toolbar,
+  useSegMergeSelection,
+  getSegMergeSelectionSnapshot,
+  toggleSegMergeDisplaySet,
+  clearSegMergeSelection,
+  subscribeSegMergeSelection,
 };

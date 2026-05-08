@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useSegMergeSelection, toggleSegMergeDisplaySet } from '../../segMergeSelectionStore';
 import { useImageViewer } from '@ohif/ui-next';
 import { useSystem, utils } from '@ohif/core';
 import { useNavigate } from 'react-router-dom';
@@ -54,6 +55,19 @@ function PanelStudyBrowser({
   );
 
   const [actionIcons, setActionIcons] = useState(defaultActionIcons);
+
+  const segMergeSelectedIds = useSegMergeSelection();
+
+  const handleToggleSegMergeSelection = useCallback(
+    displaySetInstanceUID => {
+      const ds = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+      if (!ds || ds.Modality !== 'SEG') {
+        return;
+      }
+      toggleSegMergeDisplaySet(displaySetInstanceUID);
+    },
+    [displaySetService]
+  );
 
   // multiple can be true or false
   const updateActionIconValue = actionIcon => {
@@ -440,6 +454,9 @@ function PanelStudyBrowser({
           servicesManager,
           menuItemsKey: 'studyBrowser.studyMenuItems',
         })}
+        enableSegMergeSelect={true}
+        segMergeSelectedDisplaySetInstanceUIDs={segMergeSelectedIds}
+        onToggleSegMergeSelection={handleToggleSegMergeSelection}
       />
     </>
   );

@@ -33,6 +33,9 @@ const Thumbnail = ({
   onReject = () => {},
   onClickUntrack = () => {},
   ThumbnailMenuItems = () => {},
+  segMergeSelectEnabled = false,
+  segMergeSelected = false,
+  onSegMergeCheckboxChange,
 }: withAppTypes): React.ReactNode => {
   // TODO: We should wrap our thumbnail to create a "DraggableThumbnail", as
   // this will still allow for "drag", even if there is no drop target for the
@@ -77,6 +80,26 @@ const Thumbnail = ({
               />
             ) : (
               <div className="bg-background h-[114px] w-[128px] rounded"></div>
+            )}
+
+            {segMergeSelectEnabled && (
+              <div
+                className="absolute top-0 left-0 z-10 p-[2px]"
+                onClick={e => e.stopPropagation()}
+                onMouseDown={e => e.stopPropagation()}
+              >
+                <input
+                  type="checkbox"
+                  checked={segMergeSelected}
+                  onChange={e => {
+                    e.stopPropagation();
+                    onSegMergeCheckboxChange?.(e);
+                  }}
+                  title="Select for SEG merge (max 2)"
+                  aria-label="Select segmentation for merge"
+                  className="text-highlight h-[14px] w-[14px] cursor-pointer accent-highlight"
+                />
+              </div>
             )}
 
             {/* bottom left */}
@@ -179,6 +202,25 @@ const Thumbnail = ({
         )}
       >
         <div className="relative flex h-[32px] w-full items-center gap-[8px] overflow-hidden">
+          {segMergeSelectEnabled && (
+            <div
+              className="flex shrink-0 items-center pr-1"
+              onClick={e => e.stopPropagation()}
+              onMouseDown={e => e.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                checked={segMergeSelected}
+                onChange={e => {
+                  e.stopPropagation();
+                  onSegMergeCheckboxChange?.(e);
+                }}
+                title="Select for SEG merge (max 2)"
+                aria-label="Select segmentation for merge"
+                className="text-highlight h-[14px] w-[14px] cursor-pointer accent-highlight"
+              />
+            </div>
+          )}
           <div
             className={classnames(
               'h-[32px] w-[4px] min-w-[4px] rounded',
@@ -327,6 +369,9 @@ Thumbnail.propTypes = {
   onClickUntrack: PropTypes.func,
   countIcon: PropTypes.string,
   thumbnailType: PropTypes.oneOf(['thumbnail', 'thumbnailTracked', 'thumbnailNoImage']),
+  segMergeSelectEnabled: PropTypes.bool,
+  segMergeSelected: PropTypes.bool,
+  onSegMergeCheckboxChange: PropTypes.func,
 };
 
 export { Thumbnail };

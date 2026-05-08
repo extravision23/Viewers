@@ -10,7 +10,7 @@ import {
 import { useActiveViewportSegmentationRepresentations } from '../hooks/useActiveViewportSegmentationRepresentations';
 import { useActiveToolOptions, useSystem } from '@ohif/core/src';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
-import { Toolbar, useUIStateStore } from '@ohif/extension-default';
+import { Toolbar, useUIStateStore, useSegMergeSelection } from '@ohif/extension-default';
 import SegmentationUtilityButton from '../components/SegmentationUtilityButton';
 import { useSelectedSegmentationsForViewportStore } from '../stores';
 import {
@@ -74,6 +74,9 @@ export default function PanelSegmentation({
   const setUIState = useUIStateStore(store => store.setUIState);
   const [previewNoCache, setPreviewNoCache] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [mergeLoading, setMergeLoading] = useState(false);
+  const segMergeSelectedIds = useSegMergeSelection();
+  const canMergeSegSeries = segMergeSelectedIds.length === 2;
 
   // useEffect for handling clicks on any of the non-active viewports.
   // The ViewportGrid stops the propagation of pointer/mouse events
@@ -284,6 +287,43 @@ export default function PanelSegmentation({
     );
   };
 
+  const renderSegMergeControls = () => {
+    if (segmentationRepresentationTypes?.[0] !== SegmentationRepresentations.Labelmap) {
+      return null;
+    }
+
+    return (
+      <div className="border-input mb-2 flex flex-col gap-1 rounded border px-2 py-1.5">
+        <div className="text-muted-foreground text-xs">
+          SEG merge: use checkboxes on SEG series in the study panel (
+          {segMergeSelectedIds.length}/2 selected).
+        </div>
+        <button
+          type="button"
+          className="bg-primary text-primary-foreground disabled:bg-muted disabled:text-muted-foreground rounded px-3 py-1 text-xs"
+          disabled={!canMergeSegSeries || mergeLoading}
+          onClick={async () => {
+            if (!canMergeSegSeries || mergeLoading) {
+              return;
+            }
+            try {
+              setMergeLoading(true);
+              await Promise.resolve(
+                commandsManager.run('mergeSegSeries', {
+                  viewportId: activeViewportId,
+                })
+              );
+            } finally {
+              setMergeLoading(false);
+            }
+          }}
+        >
+          {mergeLoading ? 'Merging…' : 'Merge selected segmentations'}
+        </button>
+      </div>
+    );
+  };
+
   const renderPreviewControls = () => {
     if (segmentationRepresentationTypes?.[0] !== SegmentationRepresentations.Labelmap) {
       return null;
@@ -349,6 +389,7 @@ export default function PanelSegmentation({
             <SegmentationTable.Collapsed.Info />
           </SegmentationTable.Collapsed.Header>
           <SegmentationTable.Collapsed.Content>
+            {renderSegMergeControls()}
             {renderPreviewControls()}
             <SegmentationTable.AddSegmentRow />
             {renderSegments()}
@@ -370,6 +411,7 @@ export default function PanelSegmentation({
           </SegmentationTable.Expanded.Header>
 
           <SegmentationTable.Expanded.Content>
+            {renderSegMergeControls()}
             {renderPreviewControls()}
             <SegmentationTable.AddSegmentRow />
             {renderSegments()}

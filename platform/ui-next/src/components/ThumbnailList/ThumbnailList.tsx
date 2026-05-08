@@ -12,6 +12,9 @@ const ThumbnailList = ({
   activeDisplaySetInstanceUIDs = [],
   viewPreset,
   ThumbnailMenuItems,
+  enableSegMergeSelect = false,
+  segMergeSelectedDisplaySetInstanceUIDs = [],
+  onToggleSegMergeSelection,
 }) => {
   // Use the dynamic height hook on the parent container
   const { ref, maxHeight } = useDynamicMaxHeight(thumbnails);
@@ -37,13 +40,17 @@ const ThumbnailList = ({
             className="bg-background grid grid-cols-[repeat(auto-fit,_minmax(0,135px))] place-items-start gap-[4px]"
           >
             {thumbnailItems.map(item => {
-              const { displaySetInstanceUID, componentType, numInstances, ...rest } = item;
+              const { displaySetInstanceUID, componentType, numInstances, modality, ...rest } =
+                item;
 
               const isActive = activeDisplaySetInstanceUIDs.includes(displaySetInstanceUID);
+              const mergeEnabled =
+                enableSegMergeSelect && modality === 'SEG' && typeof onToggleSegMergeSelection === 'function';
               return (
                 <Thumbnail
                   key={displaySetInstanceUID}
                   {...rest}
+                  modality={modality}
                   displaySetInstanceUID={displaySetInstanceUID}
                   numInstances={numInstances || 1}
                   isActive={isActive}
@@ -53,6 +60,18 @@ const ThumbnailList = ({
                   onDoubleClick={onThumbnailDoubleClick.bind(null, displaySetInstanceUID)}
                   onClickUntrack={onClickUntrack.bind(null, displaySetInstanceUID)}
                   ThumbnailMenuItems={ThumbnailMenuItems}
+                  segMergeSelectEnabled={mergeEnabled}
+                  segMergeSelected={segMergeSelectedDisplaySetInstanceUIDs.includes(
+                    displaySetInstanceUID
+                  )}
+                  onSegMergeCheckboxChange={
+                    mergeEnabled
+                      ? e => {
+                          e.stopPropagation();
+                          onToggleSegMergeSelection(displaySetInstanceUID);
+                        }
+                      : undefined
+                  }
                 />
               );
             })}
@@ -65,12 +84,16 @@ const ThumbnailList = ({
             className="bg-background grid grid-cols-[repeat(auto-fit,_minmax(0,275px))] place-items-start gap-[2px]"
           >
             {listItems.map(item => {
-              const { displaySetInstanceUID, componentType, numInstances, ...rest } = item;
+              const { displaySetInstanceUID, componentType, numInstances, modality, ...rest } =
+                item;
               const isActive = activeDisplaySetInstanceUIDs.includes(displaySetInstanceUID);
+              const mergeEnabled =
+                enableSegMergeSelect && modality === 'SEG' && typeof onToggleSegMergeSelection === 'function';
               return (
                 <Thumbnail
                   key={displaySetInstanceUID}
                   {...rest}
+                  modality={modality}
                   displaySetInstanceUID={displaySetInstanceUID}
                   numInstances={numInstances || 1}
                   isActive={isActive}
@@ -80,6 +103,18 @@ const ThumbnailList = ({
                   onDoubleClick={onThumbnailDoubleClick.bind(null, displaySetInstanceUID)}
                   onClickUntrack={onClickUntrack.bind(null, displaySetInstanceUID)}
                   ThumbnailMenuItems={ThumbnailMenuItems}
+                  segMergeSelectEnabled={mergeEnabled}
+                  segMergeSelected={segMergeSelectedDisplaySetInstanceUIDs.includes(
+                    displaySetInstanceUID
+                  )}
+                  onSegMergeCheckboxChange={
+                    mergeEnabled
+                      ? e => {
+                          e.stopPropagation();
+                          onToggleSegMergeSelection(displaySetInstanceUID);
+                        }
+                      : undefined
+                  }
                 />
               );
             })}
@@ -121,6 +156,9 @@ ThumbnailList.propTypes = {
   onClickUntrack: PropTypes.func.isRequired,
   viewPreset: PropTypes.string,
   ThumbnailMenuItems: PropTypes.any,
+  enableSegMergeSelect: PropTypes.bool,
+  segMergeSelectedDisplaySetInstanceUIDs: PropTypes.arrayOf(PropTypes.string),
+  onToggleSegMergeSelection: PropTypes.func,
 };
 
 export { ThumbnailList };

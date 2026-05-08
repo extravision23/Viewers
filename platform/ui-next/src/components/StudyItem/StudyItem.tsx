@@ -23,6 +23,9 @@ const StudyItem = ({
   ThumbnailMenuItems,
   StudyMenuItems,
   StudyInstanceUID,
+  enableSegMergeSelect,
+  segMergeSelectedDisplaySetInstanceUIDs,
+  onToggleSegMergeSelection,
 }: withAppTypes) => {
   return (
     <Accordion
@@ -88,6 +91,9 @@ const StudyItem = ({
               onClickUntrack={onClickUntrack}
               viewPreset={viewPreset}
               ThumbnailMenuItems={ThumbnailMenuItems}
+              enableSegMergeSelect={enableSegMergeSelect}
+              segMergeSelectedDisplaySetInstanceUIDs={segMergeSelectedDisplaySetInstanceUIDs}
+              onToggleSegMergeSelection={onToggleSegMergeSelection}
             />
           )}
         </AccordionContent>
@@ -112,6 +118,9 @@ StudyItem.propTypes = {
   viewPreset: PropTypes.string,
   StudyMenuItems: PropTypes.func,
   StudyInstanceUID: PropTypes.string,
+  enableSegMergeSelect: PropTypes.bool,
+  segMergeSelectedDisplaySetInstanceUIDs: PropTypes.arrayOf(PropTypes.string),
+  onToggleSegMergeSelection: PropTypes.func,
 };
 
 export { StudyItem };

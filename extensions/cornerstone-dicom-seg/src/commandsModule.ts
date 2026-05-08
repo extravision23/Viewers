@@ -4,7 +4,12 @@ import { cache, metaData } from '@cornerstonejs/core';
 import { segmentation as cornerstoneToolsSegmentation } from '@cornerstonejs/tools';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
 import { adaptersRT, helpers, adaptersSEG } from '@cornerstonejs/adapters';
-import { createReportDialogPrompt, useUIStateStore } from '@ohif/extension-default';
+import {
+  createReportDialogPrompt,
+  useUIStateStore,
+  clearSegMergeSelection,
+  getSegMergeSelectionSnapshot,
+} from '@ohif/extension-default';
 import { DicomMetadataStore } from '@ohif/core';
 import { buildFunctionUrl } from '@ohif/app/src/utils/buildFunctionUrl';
 import GlbPreviewDialog from './components/GlbPreviewDialog';
@@ -802,6 +807,223 @@ const commandsModule = ({
         console.error('Error in segmentByPreset:', e);
       }
     },
+    mergeSegSeries: async ({ viewportId, dataSource }) => {
+      const { uiNotificationService } = servicesManager.services as AppTypes.Services;
+
+      const selectedIds = getSegMergeSelectionSnapshot();
+      if (selectedIds.length !== 2) {
+        uiNotificationService.show({
+          title: 'SEG merge',
+          message: 'Select exactly two segmentation series in the study panel (checkboxes).',
+          type: 'warning',
+          duration: 4000,
+        });
+        return null;
+      }
+
+      const dsA = displaySetService.getDisplaySetByUID(selectedIds[0]);
+      const dsB = displaySetService.getDisplaySetByUID(selectedIds[1]);
+
+      if (!dsA || !dsB || dsA.Modality !== 'SEG' || dsB.Modality !== 'SEG') {
+        uiNotificationService.show({
+          title: 'SEG merge',
+          message: 'Both selected items must be segmentations (SEG).',
+          type: 'error',
+          duration: 5000,
+        });
+        return null;
+      }
+
+      const { activeViewportId } = viewportGridService.getState();
+      const targetViewportId = viewportId || activeViewportId;
+      if (!targetViewportId) {
+        uiNotificationService.show({
+          title: 'SEG merge',
+          message: 'No active viewport.',
+          type: 'error',
+          duration: 5000,
+        });
+        return null;
+      }
+
+      const viewport = getTargetViewport({ viewportId: targetViewportId, viewportGridService });
+      if (!viewport?.displaySetInstanceUIDs?.length) {
+        uiNotificationService.show({
+          title: 'SEG merge',
+          message: 'Viewport has no display sets.',
+          type: 'error',
+          duration: 5000,
+        });
+        return null;
+      }
+
+      let baseSeriesUID: string | undefined;
+      for (const uid of viewport.displaySetInstanceUIDs) {
+        const ds = displaySetService.getDisplaySetByUID(uid);
+        if (ds?.Modality && ds.Modality !== 'SEG') {
+          baseSeriesUID = ds.SeriesInstanceUID;
+          break;
+        }
+      }
+
+      if (!baseSeriesUID) {
+        uiNotificationService.show({
+          title: 'SEG merge',
+          message:
+            'Could not find a non-SEG series in the active viewport. Load CT/MR first (reference geometry).',
+          type: 'warning',
+          duration: 6000,
+        });
+        return null;
+      }
+
+      const studyInstanceUID = dsA.StudyInstanceUID || dsB.StudyInstanceUID;
+      if (!studyInstanceUID) {
+        uiNotificationService.show({
+          title: 'SEG merge',
+          message: 'Missing StudyInstanceUID on selected segmentations.',
+          type: 'error',
+          duration: 5000,
+        });
+        return null;
+      }
+
+      const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
+      const config = defaultDataSource.getConfig();
+
+      if (!config?.pythonFunctionName && !config?.pythonFunctionsBaseUrl) {
+        uiNotificationService.show({
+          title: 'SEG merge',
+          message: 'Python functions URL is not configured.',
+          type: 'error',
+          duration: 5000,
+        });
+        return null;
+      }
+
+      const payload = {
+        studyInstanceUID,
+        baseImageSeriesInstanceUID: baseSeriesUID,
+        segSeriesAInstanceUID: dsA.SeriesInstanceUID,
+        segSeriesBInstanceUID: dsB.SeriesInstanceUID,
+      };
+
+      uiNotificationService.show({
+        title: 'SEG merge',
+        message: 'Merging segmentations…',
+        type: 'info',
+        duration: 3000,
+      });
+
+      try {
+        const response = await fetch(buildFunctionUrl(config, 'MergeSegSeries'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader(defaultDataSource),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        const text = await response.text();
+        let result: Record<string, unknown> = {};
+        try {
+          result = text ? JSON.parse(text) : {};
+        } catch {
+          result = {};
+        }
+
+        if (response.status === 409) {
+          throw new Error(
+            (result?.error as string) ||
+              'Geometry incompatible: segmentations must match reference series.'
+          );
+        }
+        if (!response.ok) {
+          throw new Error(
+            (result?.error as string) || `Merge failed: ${response.status} ${text || ''}`
+          );
+        }
+
+        const segSeriesUID = (result as { segmentation?: { seriesInstanceUID?: string } })
+          ?.segmentation?.seriesInstanceUID;
+        if (!segSeriesUID) {
+          throw new Error('Server did not return segmentation.seriesInstanceUID');
+        }
+
+        // Show success immediately after backend confirms merge.
+        uiNotificationService.show({
+          title: 'SEG merge',
+          message: 'Segmentations merged successfully.',
+          type: 'success',
+          duration: 3000,
+        });
+
+        // Refresh study metadata immediately so left series/segmentation panels update.
+        try {
+          await defaultDataSource.retrieve.series.metadata({
+            StudyInstanceUID: studyInstanceUID,
+          });
+          await defaultDataSource.retrieve.series.metadata({
+            StudyInstanceUID: studyInstanceUID,
+            filters: {
+              SeriesInstanceUID: segSeriesUID,
+            },
+          });
+        } catch (metadataRefreshError) {
+          console.warn('SEG merge metadata refresh failed:', metadataRefreshError);
+        }
+
+        // Non-blocking auto-hydration attempt (short window, no user-facing error if it is delayed).
+        (async () => {
+          try {
+            const startedAt = Date.now();
+            const maxMs = 8000;
+            let segDisplaySet = null;
+
+            while (!segDisplaySet && Date.now() - startedAt < maxMs) {
+              const updatedDisplaySets = displaySetService.getDisplaySetsForSeries(segSeriesUID);
+              segDisplaySet = updatedDisplaySets.find(ds => ds.Modality === 'SEG');
+              if (segDisplaySet) {
+                break;
+              }
+              await new Promise(resolve => setTimeout(resolve, 250));
+            }
+
+            if (!segDisplaySet) {
+              return;
+            }
+
+            const newSegmentationId = await actions.hydrateSegmentationFromDisplaySet({
+              segDisplaySet,
+              viewportId: targetViewportId,
+            });
+
+            await actions.applySegmentationToViewport({
+              viewportId: targetViewportId,
+              segmentationId: newSegmentationId,
+            });
+          } catch (loadError) {
+            console.warn('SEG merge background auto-hydration skipped:', loadError);
+          }
+        })();
+
+        clearSegMergeSelection();
+
+        return result;
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        console.error('mergeSegSeries:', error);
+        uiNotificationService.show({
+          title: 'SEG merge failed',
+          message,
+          type: 'error',
+          duration: 6000,
+        });
+        return null;
+      }
+    },
+
     magicWandSegmentation: async ({
       studyInstanceUID,
       seriesInstanceUID,
@@ -1258,14 +1480,34 @@ const commandsModule = ({
           },
         });
 
-        // Wait for displaySet to be created via DicomMetadataStore events
-        // Poll for up to 2 seconds with 50ms intervals
+        // Wait for displaySet to be created via DicomMetadataStore events.
+        // New SEG series can appear with noticeable eventual-consistency delay.
+        // Poll longer and periodically re-trigger metadata retrieval.
         let newSegDisplaySet = null;
-        const maxWaitTime = 2000; // 2 seconds
-        const pollInterval = 50; // 50ms
+        const maxWaitTime = 15000; // 15 seconds
+        const pollInterval = 200; // 200ms
+        const refreshInterval = 2000; // re-fetch metadata every 2s while waiting
         const maxAttempts = maxWaitTime / pollInterval;
 
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          if (attempt > 0 && attempt % Math.floor(refreshInterval / pollInterval) === 0) {
+            try {
+              await defaultDataSource.retrieve.series.metadata({
+                StudyInstanceUID: studyInstanceUID,
+                filters: {
+                  SeriesInstanceUID: segSeriesInstanceUID,
+                },
+              });
+              // Some data sources index the new series with a delay for filtered requests.
+              // Fallback: refresh study-level series metadata as well.
+              await defaultDataSource.retrieve.series.metadata({
+                StudyInstanceUID: studyInstanceUID,
+              });
+            } catch (error) {
+              console.warn('Metadata refresh while waiting for SEG displaySet failed:', error);
+            }
+          }
+
           const updatedDisplaySets =
             displaySetService.getDisplaySetsForSeries(segSeriesInstanceUID);
           newSegDisplaySet = updatedDisplaySets.find(ds => ds.Modality === 'SEG');
@@ -1742,6 +1984,7 @@ const commandsModule = ({
     downloadObj: actions.downloadObj,
     previewSegmentation3D: actions.previewSegmentation3D,
     segmentByPreset: actions.segmentByPreset,
+    mergeSegSeries: actions.mergeSegSeries,
     magicWandSegmentation: actions.magicWandSegmentation,
     oneClickSegmentation: actions.oneClickSegmentation,
     totalSegmentator: actions.totalSegmentator,

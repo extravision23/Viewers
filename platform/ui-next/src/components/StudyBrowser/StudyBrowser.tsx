@@ -23,6 +23,9 @@ const StudyBrowser = ({
   viewPresets,
   ThumbnailMenuItems,
   StudyMenuItems,
+  enableSegMergeSelect,
+  segMergeSelectedDisplaySetInstanceUIDs,
+  onToggleSegMergeSelection,
 }: withAppTypes) => {
   const getTabContent = () => {
     const tabData = tabs.find(tab => tab.name === activeTabName);
@@ -52,6 +55,9 @@ const StudyBrowser = ({
               ThumbnailMenuItems={ThumbnailMenuItems}
               StudyMenuItems={StudyMenuItems}
               StudyInstanceUID={studyInstanceUid}
+              enableSegMergeSelect={enableSegMergeSelect}
+              segMergeSelectedDisplaySetInstanceUIDs={segMergeSelectedDisplaySetInstanceUIDs}
+              onToggleSegMergeSelection={onToggleSegMergeSelection}
             />
           </React.Fragment>
         );
