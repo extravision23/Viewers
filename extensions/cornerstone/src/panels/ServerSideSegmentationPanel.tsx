@@ -100,6 +100,7 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
   const [isRunningByPreset, setIsRunningByPreset] = useState(false);
   const [isRunningTotalSegmentator, setIsRunningTotalSegmentator] = useState(false);
   const [isRunningSpineSegmentator, setIsRunningSpineSegmentator] = useState(false);
+  const [isRunningVesselSegmentator, setIsRunningVesselSegmentator] = useState(false);
   const [selectedPresets, setSelectedPresets] = useState<string[]>(['bone']);
   const [minHu, setMinHu] = useState<string>('300');
   const [maxHu, setMaxHu] = useState<string>('3000');
@@ -574,6 +575,135 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
     }
   };
 
+  const handleVesselSegmentatorClick = async () => {
+    if (isRunningVesselSegmentator) {
+      return;
+    }
+
+    const { viewportGridService, displaySetService } = servicesManager.services;
+    const viewportId = viewportGridService.getActiveViewportId();
+    const { viewports } = viewportGridService.getState();
+    const viewport = viewports.get(viewportId);
+
+    if (!viewport?.displaySetInstanceUIDs?.length) {
+      uiNotificationService?.show({
+        title: 'Vessel Segmentation',
+        message: 'No active viewport/series found. Click a viewport first.',
+        type: 'error',
+      });
+      return;
+    }
+
+    const displaySetInstanceUID = viewport.displaySetInstanceUIDs[0];
+    const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+
+    if (!displaySet) {
+      uiNotificationService?.show({
+        title: 'Vessel Segmentation',
+        message: 'No display set found for active viewport.',
+        type: 'error',
+      });
+      return;
+    }
+
+    try {
+      setIsRunningVesselSegmentator(true);
+
+      const config = activeDataSource?.getConfig?.();
+      if (!config) {
+        throw new Error('No data source configuration found');
+      }
+
+      const tasksUrl = buildFunctionUrl(config, 'GetVesselSegmentationTasks');
+      const tasksResponse = await fetch(tasksUrl, {
+        method: 'GET',
+        headers: {
+          ...getAuthHeader(activeDataSource),
+        },
+        credentials: 'include',
+      });
+
+      if (!tasksResponse.ok) {
+        throw new Error(`Failed to fetch vessel tasks: ${tasksResponse.status}`);
+      }
+
+      const tasksData = await tasksResponse.json();
+      const tasks = tasksData.tasks || [];
+
+      if (tasks.length === 0) {
+        uiNotificationService?.show({
+          title: 'Vessel Segmentation',
+          message: 'No vessel segmentation tasks available.',
+          type: 'error',
+        });
+        return;
+      }
+
+      show({
+        content: TotalSegmentatorTaskModal,
+        title: 'Select a vessel segmentation task',
+        containerClassName: 'max-w-2xl',
+        contentProps: {
+          tasks,
+          onRun: async (taskName: string) => {
+            hide();
+            await runVesselSegmentator(taskName, displaySet, viewportId);
+          },
+          onClose: hide,
+        },
+      });
+    } catch (e) {
+      console.error('Error fetching vessel segmentation tasks:', e);
+      uiNotificationService?.show({
+        title: 'Vessel Segmentation',
+        message: 'Failed to fetch vessel segmentation tasks. Check console for details.',
+        type: 'error',
+      });
+    } finally {
+      setIsRunningVesselSegmentator(false);
+    }
+  };
+
+  const runVesselSegmentator = async (
+    taskName: string,
+    displaySet: any,
+    viewportId: string
+  ) => {
+    const { StudyInstanceUID: studyInstanceUID, SeriesInstanceUID: seriesInstanceUID } =
+      displaySet;
+
+    try {
+      setIsRunningVesselSegmentator(true);
+      uiNotificationService?.show({
+        title: 'Vessel Segmentation',
+        message: 'Starting vessel segmentation, please wait…',
+        type: 'info',
+      });
+
+      await commandsManager.runCommand('vesselSegmentator', {
+        studyInstanceUID,
+        seriesInstanceUID,
+        taskName,
+        viewportId,
+      });
+
+      uiNotificationService?.show({
+        title: 'Vessel Segmentation',
+        message: 'Vessel segmentation request triggered successfully.',
+        type: 'success',
+      });
+    } catch (e) {
+      console.error('Vessel Segmentation failed', e);
+      uiNotificationService?.show({
+        title: 'Vessel Segmentation',
+        message: 'Vessel segmentation request failed.',
+        type: 'error',
+      });
+    } finally {
+      setIsRunningVesselSegmentator(false);
+    }
+  };
+
   const runSpineSegmentator = async (
     taskName: string,
     displaySet: any,
@@ -619,7 +749,8 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
     isRunningOneClick ||
     isRunningByPreset ||
     isRunningTotalSegmentator ||
-    isRunningSpineSegmentator;
+    isRunningSpineSegmentator ||
+    isRunningVesselSegmentator;
   const isHuRangeDisabled = selectedPresets.length !== 1;
 
   return (
@@ -669,6 +800,17 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
             }`}
           >
             {isRunningSpineSegmentator ? 'Loading tasks…' : 'Run Spine Segmentation'}
+          </button>
+          <button
+            onClick={handleVesselSegmentatorClick}
+            disabled={isDisabled}
+            className={`w-full rounded-md px-4 py-2 font-medium transition-colors ${
+              isDisabled
+                ? 'cursor-not-allowed bg-gray-600 text-gray-400'
+                : 'bg-gray-700 text-white hover:bg-gray-600'
+            }`}
+          >
+            {isRunningVesselSegmentator ? 'Loading tasks…' : 'Run Vessel Segmentation'}
           </button>
         </div>
 
