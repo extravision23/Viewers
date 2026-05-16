@@ -86,7 +86,9 @@ export function JobsButton() {
         return;
       }
 
-      const response = await fetch(`${baseUrl}/GetOperations`);
+      const bearer = ds?.retrieve?.customClient?.headers?.Authorization;
+      const headers = bearer ? { Authorization: bearer } : {};
+      const response = await fetch(`${baseUrl}/GetOperations`, { headers });
       if (!response.ok) {
         return;
       }
