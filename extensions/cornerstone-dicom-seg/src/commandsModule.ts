@@ -1138,6 +1138,7 @@ const commandsModule = ({
           throw error;
         }
 
+        // Build payload with workerType, studyId and seriesId (backend expects these exact names)
         const payload: any = {
           workerType,
           studyId: studyInstanceUID,
@@ -1198,6 +1199,7 @@ const commandsModule = ({
           throw error;
         }
 
+        // Build payload with workerType, studyId, seriesId, and taskName
         const payload: any = {
           workerType: 'TotalSegmentator',
           studyId: studyInstanceUID,
@@ -1264,6 +1266,7 @@ const commandsModule = ({
           throw error;
         }
 
+        // Build payload with workerType, studyId, seriesId, and taskName
         const payload: any = {
           workerType: 'TotalSpineSegmentator',
           studyId: studyInstanceUID,
