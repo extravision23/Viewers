@@ -283,7 +283,7 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
     }
   };
 
-  const runOneClickSegmentation = async (apiPath: string, label: string) => {
+  const runOneClickSegmentation = async (workerType: string, label: string) => {
     if (isRunningOneClick) {
       return;
     }
@@ -319,22 +319,17 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
 
     try {
       setIsRunningOneClick(true);
-      uiNotificationService?.show({
-        title: label,
-        message: 'Starting segmentation, please wait…',
-        type: 'info',
-      });
 
       await commandsManager.runCommand('oneClickSegmentation', {
         studyInstanceUID,
         seriesInstanceUID,
-        apiPath,
+        workerType,
         viewportId,
       });
 
       uiNotificationService?.show({
         title: label,
-        message: 'Segmentation request triggered successfully.',
+        message: 'Segmentation task is enqueued.',
         type: 'success',
       });
     } catch (e) {
@@ -454,11 +449,6 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
 
     try {
       setIsRunningTotalSegmentator(true);
-      uiNotificationService?.show({
-        title: 'Total Segmentator',
-        message: 'Starting segmentation, please wait…',
-        type: 'info',
-      });
 
       await commandsManager.runCommand('totalSegmentator', {
         studyInstanceUID,
@@ -469,7 +459,7 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
 
       uiNotificationService?.show({
         title: 'Total Segmentator',
-        message: 'Segmentation request triggered successfully.',
+        message: 'Segmentation task is enqueued.',
         type: 'success',
       });
     } catch (e) {
@@ -674,11 +664,6 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
 
     try {
       setIsRunningVesselSegmentator(true);
-      uiNotificationService?.show({
-        title: 'Vessel Segmentation',
-        message: 'Starting vessel segmentation, please wait…',
-        type: 'info',
-      });
 
       await commandsManager.runCommand('vesselSegmentator', {
         studyInstanceUID,
@@ -689,7 +674,7 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
 
       uiNotificationService?.show({
         title: 'Vessel Segmentation',
-        message: 'Vessel segmentation request triggered successfully.',
+        message: 'Segmentation task is enqueued.',
         type: 'success',
       });
     } catch (e) {
@@ -714,11 +699,6 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
 
     try {
       setIsRunningSpineSegmentator(true);
-      uiNotificationService?.show({
-        title: 'Spine Segmentation',
-        message: 'Starting spine segmentation, please wait…',
-        type: 'info',
-      });
 
       await commandsManager.runCommand('totalSpineSegmentator', {
         studyInstanceUID,
@@ -729,7 +709,7 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
 
       uiNotificationService?.show({
         title: 'Spine Segmentation',
-        message: 'Spine segmentation request triggered successfully.',
+        message: 'Segmentation task is enqueued.',
         type: 'success',
       });
     } catch (e) {
@@ -758,7 +738,7 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
       <div className="space-y-3">
         <div className="space-y-2">
           <button
-            onClick={() => runOneClickSegmentation('segmentdicom', 'Synthetic Segmentation')}
+            onClick={() => runOneClickSegmentation('SegmentDicom', 'Synthetic Segmentation')}
             disabled={isDisabled}
             className={`w-full rounded-md px-4 py-2 font-medium transition-colors ${
               isDisabled
@@ -769,7 +749,7 @@ export default function ServerSideSegmentationPanel(props: ServerSideSegmentatio
             Run Synthetic Segmentation
           </button>
           <button
-            onClick={() => runOneClickSegmentation('segmenttumor', 'Tumor Segmentation')}
+            onClick={() => runOneClickSegmentation('SegmentTumor', 'Tumor Segmentation')}
             disabled={isDisabled}
             className={`w-full rounded-md px-4 py-2 font-medium transition-colors ${
               isDisabled

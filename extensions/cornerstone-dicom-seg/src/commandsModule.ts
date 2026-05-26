@@ -1108,7 +1108,7 @@ const commandsModule = ({
     oneClickSegmentation: async ({
       studyInstanceUID,
       seriesInstanceUID,
-      apiPath,
+      workerType,
       dataSource,
       viewportId,
     }) => {
@@ -1120,7 +1120,7 @@ const commandsModule = ({
           throw new Error('Missing pythonFunctionName in data source config.');
         }
 
-        const url = buildFunctionUrl(config, apiPath);
+        const url = buildFunctionUrl(config, 'EnqueueSegmentation');
         let segmentationSeriesInstanceUID;
         try {
           const result = await getActiveSegmentationSeriesForServerCall({
@@ -1138,8 +1138,8 @@ const commandsModule = ({
           throw error;
         }
 
-        // Build payload with studyId and seriesId (backend expects these exact names)
         const payload: any = {
+          workerType,
           studyId: studyInstanceUID,
           seriesId: seriesInstanceUID,
           segmentationSeriesInstanceUID,
@@ -1180,7 +1180,7 @@ const commandsModule = ({
           throw new Error('Missing pythonFunctionName in data source config.');
         }
 
-        const url = buildFunctionUrl(config, 'TotalSegmentator');
+        const url = buildFunctionUrl(config, 'EnqueueSegmentation');
         let segmentationSeriesInstanceUID;
         try {
           const result = await getActiveSegmentationSeriesForServerCall({
@@ -1198,8 +1198,8 @@ const commandsModule = ({
           throw error;
         }
 
-        // Build payload with studyId, seriesId, and taskName
         const payload: any = {
+          workerType: 'TotalSegmentator',
           studyId: studyInstanceUID,
           seriesId: seriesInstanceUID,
           taskName,
@@ -1246,7 +1246,7 @@ const commandsModule = ({
           throw new Error('Missing pythonFunctionName in data source config.');
         }
 
-        const url = buildFunctionUrl(config, 'TotalSpineSegmentator');
+        const url = buildFunctionUrl(config, 'EnqueueSegmentation');
         let segmentationSeriesInstanceUID;
         try {
           const result = await getActiveSegmentationSeriesForServerCall({
@@ -1264,8 +1264,8 @@ const commandsModule = ({
           throw error;
         }
 
-        // Build payload with studyId, seriesId, and taskName
         const payload: any = {
+          workerType: 'TotalSpineSegmentator',
           studyId: studyInstanceUID,
           seriesId: seriesInstanceUID,
           taskName,
@@ -1307,7 +1307,7 @@ const commandsModule = ({
       try {
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
         const config = defaultDataSource.getConfig();
-        const url = buildFunctionUrl(config, 'VesselSegmentation');
+        const url = buildFunctionUrl(config, 'EnqueueSegmentation');
         let segmentationSeriesInstanceUID;
         try {
           const result = await getActiveSegmentationSeriesForServerCall({
@@ -1326,6 +1326,7 @@ const commandsModule = ({
         }
 
         const payload: any = {
+          workerType: 'VesselSegmentation',
           studyId: studyInstanceUID,
           seriesId: seriesInstanceUID,
           taskName,
