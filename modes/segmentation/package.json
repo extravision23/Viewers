@@ -43,7 +43,8 @@
     "@ohif/extension-default": "3.13.0-beta.58",
     "@ohif/extension-dicom-pdf": "3.13.0-beta.58",
     "@ohif/extension-dicom-video": "3.13.0-beta.58",
-    "@ohif/mode-basic": "3.13.0-beta.58"
+    "@ohif/mode-basic": "3.13.0-beta.58",
+    "@extravision/extension-trajectory": "1.0.0"
   },
   "dependencies": {
     "@babel/runtime": "7.28.2",

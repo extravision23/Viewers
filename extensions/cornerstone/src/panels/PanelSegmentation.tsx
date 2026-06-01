@@ -74,6 +74,7 @@ export default function PanelSegmentation({
   const setUIState = useUIStateStore(store => store.setUIState);
   const [previewNoCache, setPreviewNoCache] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [trajectoryLoading, setTrajectoryLoading] = useState(false);
   const [mergeLoading, setMergeLoading] = useState(false);
   const segMergeSelectedIds = useSegMergeSelection();
   const canMergeSegSeries = segMergeSelectedIds.length === 2;
@@ -329,49 +330,86 @@ export default function PanelSegmentation({
       return null;
     }
 
-    const canPreview = !!selectedSegmentationIdForType && !previewLoading;
+    const canPreview = !!selectedSegmentationIdForType && !previewLoading && !trajectoryLoading;
+    const canTrajectory =
+      !!selectedSegmentationIdForType && !previewLoading && !trajectoryLoading;
+
     return (
-      <div className="border-input mb-2 flex items-center justify-between rounded border px-2 py-1.5">
-        <button
-          type="button"
-          className="bg-primary text-primary-foreground disabled:bg-muted disabled:text-muted-foreground rounded px-3 py-1 text-xs"
-          disabled={!canPreview}
-          onClick={async () => {
-            if (!selectedSegmentationIdForType) {
-              return;
-            }
-            try {
-              setPreviewLoading(true);
-              await Promise.resolve(
-                commandsManager.run('previewSegmentation3D', {
-                  segmentationId: selectedSegmentationIdForType,
-                  noCache: previewNoCache,
-                })
-              );
-            } finally {
-              setPreviewLoading(false);
-            }
-          }}
-        >
-          {previewLoading ? (
-            <span className="flex items-center gap-1">
-              <span className="animate-spin">⏳</span>
-              Generating 3D...
-            </span>
-          ) : (
-            'Preview 3D (GLB)'
-          )}
-        </button>
-        <label className="text-muted-foreground flex items-center gap-1 text-xs">
-          <input
-            type="checkbox"
-            checked={previewNoCache}
-            disabled={previewLoading}
-            onChange={e => setPreviewNoCache(e.target.checked)}
-          />
-          No Cache
-        </label>
-      </div>
+      <>
+        <div className="border-input mb-2 flex items-center justify-between rounded border px-2 py-1.5">
+          <button
+            type="button"
+            className="bg-primary text-primary-foreground disabled:bg-muted disabled:text-muted-foreground rounded px-3 py-1 text-xs"
+            disabled={!canPreview}
+            onClick={async () => {
+              if (!selectedSegmentationIdForType) {
+                return;
+              }
+              try {
+                setPreviewLoading(true);
+                await Promise.resolve(
+                  commandsManager.run('previewSegmentation3D', {
+                    segmentationId: selectedSegmentationIdForType,
+                    noCache: previewNoCache,
+                  })
+                );
+              } finally {
+                setPreviewLoading(false);
+              }
+            }}
+          >
+            {previewLoading ? (
+              <span className="flex items-center gap-1">
+                <span className="animate-spin">⏳</span>
+                Generating 3D...
+              </span>
+            ) : (
+              'Preview 3D (GLB)'
+            )}
+          </button>
+          <label className="text-muted-foreground flex items-center gap-1 text-xs">
+            <input
+              type="checkbox"
+              checked={previewNoCache}
+              disabled={previewLoading || trajectoryLoading}
+              onChange={e => setPreviewNoCache(e.target.checked)}
+            />
+            No Cache
+          </label>
+        </div>
+        <div className="border-input mb-2 flex items-center justify-between rounded border px-2 py-1.5">
+          <button
+            type="button"
+            className="bg-primary text-primary-foreground disabled:bg-muted disabled:text-muted-foreground rounded px-3 py-1 text-xs"
+            disabled={!canTrajectory}
+            onClick={async () => {
+              if (!selectedSegmentationIdForType) {
+                return;
+              }
+              try {
+                setTrajectoryLoading(true);
+                await Promise.resolve(
+                  commandsManager.run('openTrajectoryPlanner', {
+                    segmentationId: selectedSegmentationIdForType,
+                    noCache: previewNoCache,
+                  })
+                );
+              } finally {
+                setTrajectoryLoading(false);
+              }
+            }}
+          >
+            {trajectoryLoading ? (
+              <span className="flex items-center gap-1">
+                <span className="animate-spin">⏳</span>
+                Opening planner…
+              </span>
+            ) : (
+              'Trajectory Planner'
+            )}
+          </button>
+        </div>
+      </>
     );
   };
 
