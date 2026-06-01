@@ -2,8 +2,19 @@ import { id } from './id';
 import toolbarButtons from './toolbarButtons';
 import initToolGroups from './initToolGroups';
 import setUpAutoTabSwitchHandler from './utils/setUpAutoTabSwitchHandler';
-import { ohif, cornerstone, extensionDependencies, dicomRT, segmentation } from '@ohif/mode-basic';
+import {
+  ohif,
+  cornerstone,
+  extensionDependencies as baseExtensionDependencies,
+  dicomRT,
+  segmentation,
+} from '@ohif/mode-basic';
 export * from './toolbarButtons';
+
+export const extensionDependencies = {
+  ...baseExtensionDependencies,
+  '@extravision/extension-trajectory': '^1.0.0',
+};
 
 function modeFactory({ modeConfiguration }) {
   const _unsubscriptions = [];
