@@ -1,3 +1,4 @@
+import { Enums as csCoreEnums } from '@cornerstonejs/core';
 import { Enums } from '@cornerstonejs/tools';
 import i18n from '@ohif/i18n';
 import { utils } from '@ohif/ui-next';
@@ -28,6 +29,7 @@ export default function getToolbarModule({ servicesManager, extensionManager }: 
     displaySetService,
     viewportGridService,
     segmentationService,
+    customizationService,
   } = servicesManager.services;
 
   return [
@@ -239,9 +241,18 @@ export default function getToolbarModule({ servicesManager, extensionManager }: 
     },
     {
       name: 'evaluate.windowLevelMenuEmbedded',
-      evaluate: () => {
+      evaluate: ({ viewportId }) => {
+        const floatingPanelConfig = customizationService.getCustomization(
+          'cornerstone.volumeRenderingFloatingPanel'
+        ) as { enabled?: boolean } | undefined;
+
+        const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+        const is3DVolume = viewport?.type === csCoreEnums.ViewportType.VOLUME_3D;
+        const useFloatingPanel = floatingPanelConfig?.enabled !== false && is3DVolume;
+
         return {
           isEmbedded: true,
+          disabled: useFloatingPanel,
         };
       },
     },
