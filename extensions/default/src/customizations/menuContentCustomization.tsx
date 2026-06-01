@@ -7,6 +7,9 @@ import {
   DropdownMenuItem,
   Icons,
 } from '@ohif/ui-next';
+import MprCleanupStudyMenuItem, {
+  isMprCleanupMenuItem,
+} from '../Components/MprCleanupStudyMenuItem';
 
 export default {
   'ohif.menuContent': function (props) {
@@ -14,6 +17,17 @@ export default {
 
     const content = function (subProps) {
       const { item: subItem } = subProps;
+
+      if (isMprCleanupMenuItem(subItem)) {
+        return (
+          <MprCleanupStudyMenuItem
+            item={subItem}
+            commandsManager={commandsManager}
+            servicesManager={servicesManager}
+            {...rest}
+          />
+        );
+      }
 
       // Regular menu item
       const isDisabled = subItem.selector && !subItem.selector({ servicesManager, ...rest });
