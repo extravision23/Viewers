@@ -26,6 +26,13 @@ import { useToggleOneUpViewportGridStore } from './stores/useToggleOneUpViewport
 import requestDisplaySetCreationForStudy from './Panels/requestDisplaySetCreationForStudy';
 import promptSaveReport from './utils/promptSaveReport';
 import { isMprInFlight, setMprInFlight } from './utils/mprDeriveState';
+import { promptMprCleanupConfirm } from './utils/promptMprCleanupConfirm';
+import {
+  isMprCleanupInFlight,
+  setMprCleanupPhase,
+  setMprCleanupProgress,
+} from './utils/mprCleanupState';
+import i18n from '@ohif/i18n';
 
 export type HangingProtocolParams = {
   protocolId?: string;
@@ -50,6 +57,7 @@ const commandsModule = ({
     measurementService,
     hangingProtocolService,
     uiNotificationService,
+    uiDialogService,
     viewportGridService,
     displaySetService,
     multiMonitorService,
@@ -301,6 +309,235 @@ const commandsModule = ({
         });
       } finally {
         setMprInFlight(seriesInstanceUID, planeNormalized, false);
+      }
+    },
+    mprCleanup: async ({ studyInstanceUID }) => {
+      if (isMprCleanupInFlight()) {
+        return;
+      }
+
+      const resolvedStudyUID =
+        studyInstanceUID ||
+        displaySetService.activeDisplaySets?.[0]?.StudyInstanceUID;
+
+      if (!resolvedStudyUID) {
+        uiNotificationService.show({
+          title: i18n.t('StudyBrowser:MPR cleanup title'),
+          message: i18n.t('StudyBrowser:MPR cleanup no study'),
+          type: 'error',
+          duration: 3000,
+        });
+        return;
+      }
+
+      const dataSource = extensionManager.getActiveDataSource()[0];
+      const config = dataSource?.getConfig?.();
+
+      if (!config) {
+        uiNotificationService.show({
+          title: i18n.t('StudyBrowser:MPR cleanup title'),
+          message: i18n.t('StudyBrowser:MPR cleanup no data source'),
+          type: 'error',
+          duration: 3000,
+        });
+        return;
+      }
+
+      const configuredBatchSize = Number(config?.mprCleanupBatchSize);
+      const BATCH_SIZE =
+        Number.isFinite(configuredBatchSize) && configuredBatchSize > 0
+          ? Math.floor(configuredBatchSize)
+          : 5;
+
+      const runCleanup = async (
+        isDryRun: boolean,
+        options?: { batchSize?: number; seriesInstanceUIDs?: string[] }
+      ) => {
+        const url = buildFunctionUrl(config, 'MPRCleanup');
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader(dataSource),
+          },
+          body: JSON.stringify({
+            studyInstanceUID: resolvedStudyUID,
+            dryRun: isDryRun,
+            ...(options?.batchSize ? { batchSize: options.batchSize } : {}),
+            ...(options?.seriesInstanceUIDs?.length
+              ? { seriesInstanceUIDs: options.seriesInstanceUIDs }
+              : {}),
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(errorText || `HTTP ${response.status}`);
+        }
+
+        return response.json();
+      };
+
+      let loadingNotificationId: string | undefined;
+
+      const hideLoading = () => {
+        if (loadingNotificationId) {
+          uiNotificationService.hide(loadingNotificationId);
+          loadingNotificationId = undefined;
+        }
+      };
+
+      const showLoading = (messageKey: string, params?: Record<string, unknown>) => {
+        hideLoading();
+        loadingNotificationId = uiNotificationService.show({
+          title: i18n.t('StudyBrowser:MPR cleanup title'),
+          message: i18n.t(messageKey, params),
+          type: 'info',
+          duration: 0,
+        });
+      };
+
+      try {
+        setMprCleanupProgress(null);
+        setMprCleanupPhase('collecting');
+        showLoading('StudyBrowser:MPR cleanup collecting');
+
+        const preview = await runCleanup(true);
+        hideLoading();
+
+        const summary = preview?.summary || {};
+        const obsoleteCount = summary.obsoleteSeries ?? 0;
+        const obsoleteSeriesUids: string[] = (preview?.obsolete || [])
+          .map((row: { series_uid?: string }) => row?.series_uid)
+          .filter(Boolean);
+
+        if (summary.cleanupBlocked) {
+          uiNotificationService.show({
+            title: i18n.t('StudyBrowser:MPR cleanup title'),
+            message: i18n.t('StudyBrowser:MPR cleanup blocked', {
+              mprFound: summary.mprSeriesFound ?? 0,
+            }),
+            type: 'warning',
+            duration: 8000,
+          });
+          return;
+        }
+
+        if (obsoleteCount === 0) {
+          uiNotificationService.show({
+            title: i18n.t('StudyBrowser:MPR cleanup title'),
+            message: i18n.t('StudyBrowser:MPR cleanup none found'),
+            type: 'info',
+            duration: 4000,
+          });
+          return;
+        }
+
+        setMprCleanupPhase('confirming');
+
+        const decision = await promptMprCleanupConfirm({
+          uiDialogService,
+          summary,
+        });
+
+        if (decision !== 'delete') {
+          return;
+        }
+
+        setMprCleanupPhase('deleting');
+
+        let deleted = 0;
+        let removedSeries = 0;
+        let errors = 0;
+
+        const refreshSeriesMetadata = async () => {
+          try {
+            await dataSource.retrieve.series.metadata({
+              StudyInstanceUID: resolvedStudyUID,
+            });
+          } catch (refreshError) {
+            console.warn('Failed to refresh display sets after MPR cleanup:', refreshError);
+          }
+        };
+
+        const showDeleteProgress = (batchFrom: number, batchTo: number) => {
+          const params = {
+            from: batchFrom,
+            to: batchTo,
+            total: obsoleteCount,
+          };
+          showLoading('StudyBrowser:MPR cleanup deleting progress', params);
+          setMprCleanupProgress({
+            batchFrom,
+            batchTo,
+            total: obsoleteCount,
+          });
+        };
+
+        let guard = 0;
+        while (removedSeries < obsoleteSeriesUids.length && guard < 200) {
+          guard += 1;
+          const batchUids = obsoleteSeriesUids.slice(
+            removedSeries,
+            removedSeries + BATCH_SIZE
+          );
+          if (batchUids.length === 0) {
+            break;
+          }
+
+          const batchFrom = removedSeries + 1;
+          const batchTo = removedSeries + batchUids.length;
+          showDeleteProgress(batchFrom, batchTo);
+
+          const result = await runCleanup(false, { seriesInstanceUIDs: batchUids });
+          const resultSummary = result?.summary || {};
+          const batchDeleted = resultSummary.deletedInstances ?? 0;
+          const batchRemovedSeries = resultSummary.deletedSeries ?? 0;
+
+          deleted += batchDeleted;
+          removedSeries += batchRemovedSeries;
+          errors += resultSummary.deleteErrors ?? 0;
+
+          await refreshSeriesMetadata();
+
+          if (batchRemovedSeries === 0) {
+            break;
+          }
+        }
+
+        hideLoading();
+
+        const doneMessage =
+          errors > 0
+            ? i18n.t('StudyBrowser:MPR cleanup done with errors', {
+                deleted,
+                series: removedSeries,
+                errors,
+              })
+            : i18n.t('StudyBrowser:MPR cleanup done success', {
+                deleted,
+                series: removedSeries,
+              });
+
+        uiNotificationService.show({
+          title: i18n.t('StudyBrowser:MPR cleanup title'),
+          message: doneMessage,
+          type: errors ? 'warning' : 'success',
+          duration: 5000,
+        });
+      } catch (error) {
+        hideLoading();
+        uiDialogService.hide('mpr-cleanup-confirm');
+        console.warn('MPRCleanup failed', error);
+        uiNotificationService.show({
+          title: i18n.t('StudyBrowser:MPR cleanup title'),
+          message: i18n.t('StudyBrowser:MPR cleanup failed'),
+          type: 'error',
+          duration: 4000,
+        });
+      } finally {
+        setMprCleanupProgress(null);
+        setMprCleanupPhase('idle');
       }
     },
     /**
@@ -900,6 +1137,7 @@ const commandsModule = ({
     addDisplaySetAsLayer: actions.addDisplaySetAsLayer,
     removeDisplaySetLayer: actions.removeDisplaySetLayer,
     mprDerive: actions.mprDerive,
+    mprCleanup: actions.mprCleanup,
   };
 
   return {

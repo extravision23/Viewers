@@ -158,7 +158,14 @@ const isEligibleForMpr = displaySet => {
 };
 
 export default {
-  'studyBrowser.studyMenuItems': [],
+  'studyBrowser.studyMenuItems': [
+    {
+      id: 'cleanupDuplicateMpr',
+      label: i18n.t('StudyBrowser:Cleanup duplicate MPR'),
+      iconName: 'Delete',
+      commands: 'mprCleanup',
+    },
+  ],
   'studyBrowser.thumbnailMenuItems': [
     {
       id: 'tagBrowser',
