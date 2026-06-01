@@ -1,6 +1,6 @@
 import dcmjs from 'dcmjs';
 import { Types } from '@ohif/core';
-import { cache, metaData } from '@cornerstonejs/core';
+import { cache, metaData, utilities as csUtils } from '@cornerstonejs/core';
 import { segmentation as cornerstoneToolsSegmentation } from '@cornerstonejs/tools';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
 import { adaptersRT, helpers, adaptersSEG } from '@cornerstonejs/adapters';
@@ -79,6 +79,30 @@ function appendQueryParam(url: string, key: string, value: string): string {
  * @param viewportGridService - The viewport grid service
  * @returns Array of visible segment numbers (starting from 1)
  */
+function getActiveViewportWindowLevel(servicesManager, viewportGridService) {
+  const defaults = { center: 40, width: 400 };
+  try {
+    const { cornerstoneViewportService } = servicesManager.services;
+    const { activeViewportId } = viewportGridService.getState();
+    if (!activeViewportId) {
+      return defaults;
+    }
+    const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+    const properties = viewport?.getProperties?.();
+    const voiRange = properties?.voiRange;
+    if (voiRange?.lower !== undefined && voiRange?.upper !== undefined) {
+      const { windowWidth, windowCenter } = csUtils.windowLevel.toWindowLevel(
+        voiRange.lower,
+        voiRange.upper
+      );
+      return { center: windowCenter, width: windowWidth };
+    }
+  } catch {
+    // use defaults
+  }
+  return defaults;
+}
+
 function getVisibleSegmentNumbers(
   segmentationId: string,
   segmentationService: any,
@@ -664,6 +688,11 @@ const commandsModule = ({
         formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
         formData.append('format', 'glb');
         formData.append('response', 'json');
+        formData.append('meshQuality', 'preview');
+
+        const anatomyWindow = getActiveViewportWindowLevel(servicesManager, viewportGridService);
+        formData.append('anatomyWindowCenter', String(anatomyWindow.center));
+        formData.append('anatomyWindowWidth', String(anatomyWindow.width));
 
         const selectedSegmentNumbers = getVisibleSegmentNumbers(
           segmentationId,
@@ -718,6 +747,15 @@ const commandsModule = ({
               segmentNumber: item.segmentNumber,
             })),
             title: segmentationInOHIF.label,
+            anatomyWindow,
+            onRegenerate: () => {
+              uiDialogService.hide('segmentation-glb-preview');
+              actions.previewSegmentation3D({
+                segmentationId,
+                dataSource: defaultDataSource,
+                noCache: true,
+              });
+            },
           },
         });
 
