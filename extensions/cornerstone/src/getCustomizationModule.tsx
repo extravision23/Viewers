@@ -5,6 +5,7 @@ import viewportToolsCustomization from './customizations/viewportToolsCustomizat
 import viewportClickCommandsCustomization from './customizations/viewportClickCommandsCustomization';
 import measurementsCustomization from './customizations/measurementsCustomization';
 import volumeRenderingCustomization from './customizations/volumeRenderingCustomization';
+import volumeRenderingFloatingPanelCustomization from './customizations/volumeRenderingFloatingPanelCustomization';
 import colorbarCustomization from './customizations/colorbarCustomization';
 import modalityColorMapCustomization from './customizations/modalityColorMapCustomization';
 import windowLevelPresetsCustomization from './customizations/windowLevelPresetsCustomization';
@@ -28,6 +29,7 @@ function getCustomizationModule({ commandsManager, servicesManager, extensionMan
         ...viewportClickCommandsCustomization,
         ...measurementsCustomization,
         ...volumeRenderingCustomization,
+        ...volumeRenderingFloatingPanelCustomization,
         ...colorbarCustomization,
         ...modalityColorMapCustomization,
         ...windowLevelPresetsCustomization,
