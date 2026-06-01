@@ -45,6 +45,10 @@ import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 import toggleVOISliceSync from './utils/toggleVOISliceSync';
 import {
+  resetSurfaceSegmentationActorTransforms,
+  shiftVolumeOpacityPointsWithSegmentation,
+} from './utils/shiftVolumeAndSegmentation';
+import {
   usePositionPresentationStore,
   useSegmentationPresentationStore,
   useSelectedSegmentationsForViewportStore,
@@ -2205,6 +2209,10 @@ function commandsModule({
       viewport.setProperties({
         preset,
       });
+      if (viewport.shiftedBy) {
+        viewport.shiftedBy = 0;
+      }
+      resetSurfaceSegmentationActorTransforms(viewport);
       viewport.render();
     },
 
@@ -2240,28 +2248,7 @@ function commandsModule({
      */
     shiftVolumeOpacityPoints: ({ viewportId, shift }) => {
       const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
-      const { actor } = viewport.getActors()[0];
-      const ofun = actor.getProperty().getScalarOpacity(0);
-
-      const opacityPointValues = []; // Array to hold values
-      // Gather Existing Values
-      const size = ofun.getSize();
-      for (let pointIdx = 0; pointIdx < size; pointIdx++) {
-        const opacityPointValue = [0, 0, 0, 0];
-        ofun.getNodeValue(pointIdx, opacityPointValue);
-        // opacityPointValue now holds [xLocation, opacity, midpoint, sharpness]
-        opacityPointValues.push(opacityPointValue);
-      }
-      // Add offset
-      opacityPointValues.forEach(opacityPointValue => {
-        opacityPointValue[0] += shift; // Change the location value
-      });
-      // Set new values
-      ofun.removeAllPoints();
-      opacityPointValues.forEach(opacityPointValue => {
-        ofun.addPoint(...opacityPointValue);
-      });
-      viewport.render();
+      shiftVolumeOpacityPointsWithSegmentation(viewport, shift);
     },
 
     /**

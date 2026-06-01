@@ -113,6 +113,13 @@ function ToolbarLayoutSelectorWithServices({
             protocolId: 'segment3D',
           },
         },
+        {
+          title: '3D Only + Segment',
+          icon: 'layout-advanced-3d-only',
+          commandOptions: {
+            protocolId: 'only3DAndSegment',
+          },
+        },
       ];
 
   // Unified selection handler that dispatches to the appropriate command
