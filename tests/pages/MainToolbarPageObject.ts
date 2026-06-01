@@ -89,6 +89,17 @@ export class MainToolbarPageObject {
           },
         };
       },
+      get threeDOnlyAndSegment() {
+        const button = page.getByTestId('3D Only + Segment');
+        return {
+          button,
+          async click() {
+            await layoutSelection.click();
+            await button.click();
+            await self.waitForVolumeLoad();
+          },
+        };
+      },
       get threeDPrimary() {
         const button = page.getByTestId('3D primary');
         return {

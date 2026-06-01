@@ -3,6 +3,7 @@ import { main3D } from './hps/main3D';
 import { mpr } from './hps/mpr';
 import { mprAnd3DVolumeViewport } from './hps/mprAnd3DVolumeViewport';
 import { only3D } from './hps/only3D';
+import { only3DAndSegment } from './hps/only3DAndSegment';
 import { primary3D } from './hps/primary3D';
 import { primaryAxial } from './hps/primaryAxial';
 import { frameView } from './hps/frameView';
@@ -33,6 +34,10 @@ function getHangingProtocolModule() {
     {
       name: only3D.id,
       protocol: only3D,
+    },
+    {
+      name: only3DAndSegment.id,
+      protocol: only3DAndSegment,
     },
     {
       name: primary3D.id,

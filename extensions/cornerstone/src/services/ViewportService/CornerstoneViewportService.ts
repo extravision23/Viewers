@@ -1132,6 +1132,13 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       });
     });
 
+    this._restoreVolumeVisibilityAfterLayoutChange(
+      viewport,
+      viewportInfo,
+      volumesProperties,
+      timeoutViewportCallback
+    );
+
     // Note: Volume hiding for segment-only viewports is now handled in _setSegmentationPresentation
     // after segmentation representations are added, to ensure we know the representation type
 
@@ -1443,6 +1450,43 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     if (viewPresentation) {
       viewport.setViewPresentation(viewPresentation);
     }
+  }
+
+  /**
+   * When switching from segment-only layouts (hideVolume), volume opacity may remain 0.
+   * Re-apply the hanging-protocol preset so volume rendering is visible again.
+   */
+  private _restoreVolumeVisibilityAfterLayoutChange(
+    viewport: Types.IVolumeViewport,
+    viewportInfo: ViewportInfo,
+    volumesProperties: { properties: ViewportProperties; volumeId: string }[],
+    timeoutViewportCallback: (callback: () => void) => void
+  ): void {
+    const shouldHideVolume = viewportInfo?.getViewportOptions()?.customViewportProps?.hideVolume;
+
+    if (shouldHideVolume || viewport.type !== csEnums.ViewportType.VOLUME_3D) {
+      return;
+    }
+
+    if (!(viewport instanceof VolumeViewport3D)) {
+      return;
+    }
+
+    volumesProperties.forEach(({ properties, volumeId }) => {
+      timeoutViewportCallback(() => {
+        const currentProperties = viewport.getProperties(volumeId);
+        const opacity = currentProperties?.colormap?.opacity;
+        const isHidden =
+          opacity === 0 || (Array.isArray(opacity) && opacity.every(value => value === 0));
+
+        if (!isHidden || !properties.preset) {
+          return;
+        }
+
+        viewport.setProperties({ preset: properties.preset }, volumeId);
+        viewport.render();
+      });
+    });
   }
 
   private _setSegmentationPresentation(
