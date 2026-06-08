@@ -16,12 +16,14 @@ interface Operation {
 }
 
 const STATUS_LABEL: Record<string, string> = {
+  InQueue: 'In Queue',
   InProgress: 'In Progress',
   Completed: 'Completed',
   Failed: 'Failed',
 };
 
 const STATUS_COLOR: Record<string, string> = {
+  InQueue: 'text-yellow-400',
   InProgress: 'text-blue-400',
   Completed: 'text-green-400',
   Failed: 'text-red-400',
