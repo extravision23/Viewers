@@ -45,7 +45,8 @@ import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 import toggleVOISliceSync from './utils/toggleVOISliceSync';
 import {
-  resetSurfaceSegmentationActorTransforms,
+  moveViewportActors,
+  resetViewportActorTransforms,
   shiftVolumeOpacityPointsWithSegmentation,
 } from './utils/shiftVolumeAndSegmentation';
 import {
@@ -2212,7 +2213,10 @@ function commandsModule({
       if (viewport.shiftedBy) {
         viewport.shiftedBy = 0;
       }
-      resetSurfaceSegmentationActorTransforms(viewport);
+      if (viewport.movedBy) {
+        viewport.movedBy = 0;
+      }
+      resetViewportActorTransforms(viewport);
       viewport.render();
     },
 
@@ -2249,6 +2253,20 @@ function commandsModule({
     shiftVolumeOpacityPoints: ({ viewportId, shift }) => {
       const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
       shiftVolumeOpacityPointsWithSegmentation(viewport, shift);
+    },
+
+    /**
+     * Spatially moves all actors (volume + segmentation) of a viewport together
+     * along the camera view direction.
+     * @param {string} viewportId - The ID of the viewport.
+     * @param {number} move - Incremental distance in world units (mm).
+     */
+    moveVolumeWithSegmentation: ({ viewportId, move }) => {
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+      if (!viewport) {
+        return;
+      }
+      moveViewportActors(viewport, move);
     },
 
     /**
@@ -4385,6 +4403,9 @@ function commandsModule({
     },
     shiftVolumeOpacityPoints: {
       commandFn: actions.shiftVolumeOpacityPoints,
+    },
+    moveVolumeWithSegmentation: {
+      commandFn: actions.moveVolumeWithSegmentation,
     },
     setVolumeLighting: {
       commandFn: actions.setVolumeLighting,

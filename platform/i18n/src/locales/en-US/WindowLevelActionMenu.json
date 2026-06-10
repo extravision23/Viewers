@@ -15,5 +15,6 @@
   "Ambient": "Ambient",
   "Diffuse": "Diffuse",
   "Specular": "Specular",
-  "Shift": "Shift"
+  "Shift": "Shift",
+  "Move": "Move"
 }
