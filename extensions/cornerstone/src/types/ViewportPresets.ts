@@ -42,6 +42,10 @@ export type VolumeShiftProps = {
   viewportId: string;
 };
 
+export type VolumeMoveProps = {
+  viewportId: string;
+};
+
 export type VolumeShadeProps = {
   viewportId: string;
   onClickShade?: (bool: boolean) => void;

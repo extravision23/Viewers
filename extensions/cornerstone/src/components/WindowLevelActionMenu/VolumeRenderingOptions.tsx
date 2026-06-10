@@ -2,6 +2,7 @@ import React, { ReactElement, useState, useCallback } from 'react';
 import { AllInOneMenu } from '@ohif/ui-next';
 import { VolumeRenderingQuality } from './VolumeRenderingQuality';
 import { VolumeShift } from './VolumeShift';
+import { VolumeMove } from './VolumeMove';
 import { VolumeLighting } from './VolumeLighting';
 import { VolumeShade } from './VolumeShade';
 import { useViewportRendering } from '../../hooks/useViewportRendering';
@@ -55,6 +56,7 @@ export function VolumeRenderingOptionsContent({
         volumeRenderingQualityRange={volumeRenderingQualityRange}
       />
       <VolumeShift viewportId={viewportId} />
+      <VolumeMove viewportId={viewportId} />
       <div className="mt-2 flex h-8 !h-[20px] w-full flex-shrink-0 items-center justify-start px-2 text-base">
         <div className="text-muted-foreground text-sm">{t('Lighting')}</div>
       </div>
