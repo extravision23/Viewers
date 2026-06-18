@@ -70,6 +70,11 @@
       "packageName": "@extravision/extension-trajectory",
       "default": false,
       "version": "1.0.0"
+    },
+    {
+      "packageName": "@extravision/extension-chat",
+      "default": false,
+      "version": "1.0.0"
     }
   ],
   "modes": [
