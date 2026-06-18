@@ -1,14 +1,5 @@
 import React from 'react';
 
-/**
- * Minimal, dependency-free markdown renderer for assistant messages.
- *
- * Supports the subset the agent produces: headings (`#` or a whole-line
- * `**bold**`), `**bold**` / `` `code` `` inline, bullet (`-`/`*`) and numbered
- * lists, horizontal rules (`---`), and paragraphs. Renders real React elements
- * (no dangerouslySetInnerHTML), so it's XSS-safe.
- */
-
 function renderInline(text: string, keyBase: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   const regex = /(\*\*[^*]+\*\*|`[^`]+`)/g;
