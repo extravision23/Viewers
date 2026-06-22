@@ -4,6 +4,7 @@
 window.config = {
   name: 'config/default.js',
   routerBasename: null,
+  agentBaseUrl: 'http://localhost:7072',
   // whiteLabeling: {},
   extensions: [],
   modes: [],

@@ -14,7 +14,11 @@ export * from './toolbarButtons';
 export const extensionDependencies = {
   ...baseExtensionDependencies,
   '@extravision/extension-trajectory': '^1.0.0',
+  '@extravision/extension-chat': '^1.0.0',
 };
+
+// Study-level AI assistant chat panel.
+const aiChatPanel = '@extravision/extension-chat.panelModule.aiChat';
 
 function modeFactory({ modeConfiguration }) {
   const _unsubscriptions = [];
@@ -248,6 +252,7 @@ function modeFactory({ modeConfiguration }) {
               leftPanels: [ohif.thumbnailList],
               leftPanelResizable: true,
               rightPanels: [
+                aiChatPanel,
                 cornerstone.measurements,
                 cornerstone.labelMapSegmentationPanel,
                 cornerstone.contourSegmentationPanel,
