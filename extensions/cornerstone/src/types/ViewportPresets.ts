@@ -44,6 +44,13 @@ export type VolumeShiftProps = {
 
 export type VolumeCutMode = 'observer' | 'coronal' | 'sagittal' | 'axial';
 
+export type VolumeCutPlaneState = {
+  enabled: boolean;
+  offset: number;
+};
+
+export type VolumeCutPlanesState = Record<VolumeCutMode, VolumeCutPlaneState>;
+
 export type VolumeMoveProps = {
   viewportId: string;
 };

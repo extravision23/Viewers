@@ -1,7 +1,9 @@
-import { Types } from '@cornerstonejs/core';
+import { Types, Enums } from '@cornerstonejs/core';
 import { mat4, vec3 } from 'gl-matrix';
 import vtkPlane from '@kitware/vtk.js/Common/DataModel/Plane';
 import type { VolumeCutMode } from '../types/ViewportPresets';
+
+type CutPlaneConfig = { mode: VolumeCutMode; offset: number };
 
 /**
  * Shifts scalar opacity transfer-function nodes (volume rendering "Shift" control).
@@ -46,7 +48,7 @@ export function shiftScalarOpacityPoints(
  *
  * This is a transfer-function-only operation (reveals/peels tissue); it does NOT
  * move anything spatially, so segmentation actors must stay in place to remain
- * anatomically registered to the voxels. Use applyVolumeCutPlane for spatial cuts.
+ * anatomically registered to the voxels. Use applyVolumeCutPlanes for spatial cuts.
  */
 export function shiftVolumeOpacityPointsWithSegmentation(
   viewport: Types.IVolumeViewport,
@@ -151,9 +153,69 @@ function getCutBaseNormal(viewport: Types.IVolumeViewport, mode: VolumeCutMode):
 }
 
 /**
- * Removes any clipping planes from every actor mapper of the viewport.
+ * Rebuilds the clipping planes from a config and applies them to every actor
+ * mapper. The observer plane is rebuilt from the live camera, so calling this on
+ * camera change keeps the "from observer" cut aligned with the current view.
+ */
+function renderCutPlanes(viewport: Types.IVolumeViewport, planes: CutPlaneConfig[]): void {
+  const bounds = getViewportBounds(viewport);
+  if (!bounds) {
+    return;
+  }
+
+  const vtkPlanes = (planes ?? [])
+    .map(({ mode, offset }) => buildCutPlane(viewport, bounds, mode, offset))
+    .filter((plane): plane is ReturnType<typeof vtkPlane.newInstance> => plane !== null);
+
+  viewport.getActors().forEach(({ actor }) => {
+    const mapper = actor.getMapper?.();
+    if (!mapper?.removeAllClippingPlanes) {
+      return;
+    }
+    mapper.removeAllClippingPlanes();
+    vtkPlanes.forEach(plane => mapper.addClippingPlane?.(plane));
+  });
+
+  viewport.render();
+}
+
+/**
+ * Detaches the camera-tracking listener if present.
+ */
+function detachCutCameraTracking(viewport: Types.IVolumeViewport): void {
+  const handler = viewport.__cutCameraHandler;
+  if (handler) {
+    viewport.element?.removeEventListener(Enums.Events.CAMERA_MODIFIED, handler);
+  }
+  viewport.__cutCameraHandler = undefined;
+}
+
+/**
+ * Attaches a camera-tracking listener that re-applies the stored cut planes on
+ * every camera change. This keeps the observer cut following the viewer and
+ * ensures all clipping planes survive camera rotation.
+ */
+function attachCutCameraTracking(viewport: Types.IVolumeViewport): void {
+  if (viewport.__cutCameraHandler) {
+    return;
+  }
+  const handler = () => {
+    const stored = viewport.__cutPlanesConfig as CutPlaneConfig[] | undefined;
+    if (stored?.length) {
+      renderCutPlanes(viewport, stored);
+    }
+  };
+  viewport.__cutCameraHandler = handler;
+  viewport.element?.addEventListener(Enums.Events.CAMERA_MODIFIED, handler);
+}
+
+/**
+ * Removes any clipping planes from every actor mapper of the viewport and stops
+ * camera tracking.
  */
 export function clearVolumeCutPlanes(viewport: Types.IVolumeViewport): void {
+  detachCutCameraTracking(viewport);
+  viewport.__cutPlanesConfig = undefined;
   viewport.getActors().forEach(({ actor }) => {
     const mapper = actor.getMapper?.();
     mapper?.removeAllClippingPlanes?.();
@@ -162,29 +224,21 @@ export function clearVolumeCutPlanes(viewport: Types.IVolumeViewport): void {
 }
 
 /**
- * Applies a single clipping plane to ALL actors of the viewport (volume render,
- * merged labelmap and segment surfaces) so the cut affects both the volume label
- * and the segment identically.
- *
- * @param mode - cut plane orientation (observer / coronal / sagittal / axial).
- * @param offset - signed distance from the volume center (mm). A value of 0
- *   removes the cut entirely; the sign chooses which side is removed and the
- *   magnitude controls how deep the cut goes.
+ * Builds a single clipping plane for the given cut mode/offset, or null when the
+ * offset is 0 (no cut). The plane normal points into the region that stays
+ * visible; the offset sign chooses which side is removed and the magnitude
+ * controls how deep the cut goes.
  */
-export function applyVolumeCutPlane(
+function buildCutPlane(
   viewport: Types.IVolumeViewport,
+  bounds: { min: vec3; max: vec3 },
   mode: VolumeCutMode,
   offset: number
-): void {
+): ReturnType<typeof vtkPlane.newInstance> | null {
   if (!offset) {
-    clearVolumeCutPlanes(viewport);
-    return;
+    return null;
   }
 
-  const bounds = getViewportBounds(viewport);
-  if (!bounds) {
-    return;
-  }
   const { min, max } = bounds;
   const center = vec3.fromValues(
     (min[0] + max[0]) / 2,
@@ -208,14 +262,34 @@ export function applyVolumeCutPlane(
   plane.setNormal(clipNormal[0], clipNormal[1], clipNormal[2]);
   plane.setOrigin(origin[0], origin[1], origin[2]);
 
-  viewport.getActors().forEach(({ actor }) => {
-    const mapper = actor.getMapper?.();
-    if (!mapper?.addClippingPlane) {
-      return;
-    }
-    mapper.removeAllClippingPlanes?.();
-    mapper.addClippingPlane(plane);
-  });
+  return plane;
+}
 
-  viewport.render();
+/**
+ * Applies a combination of clipping planes to ALL actors of the viewport (volume
+ * render, merged labelmap and segment surfaces) so the cuts affect both the
+ * volume label and the segment identically. Multiple planes intersect, so e.g. a
+ * sagittal and a coronal cut together carve out a corner of the volume.
+ *
+ * @param planes - the active cut planes; entries with offset 0 are ignored.
+ */
+export function applyVolumeCutPlanes(
+  viewport: Types.IVolumeViewport,
+  planes: CutPlaneConfig[]
+): void {
+  const config = planes ?? [];
+  viewport.__cutPlanesConfig = config;
+
+  renderCutPlanes(viewport, config);
+
+  // Re-apply the clipping planes on every camera change while any cut is active.
+  // This keeps the observer cut aligned with the view AND works around the volume
+  // mapper dropping/!updating its clipping planes on rotation, which otherwise
+  // makes the volume nearly vanish once the camera moves.
+  const anyActive = config.some(({ offset }) => offset);
+  if (anyActive) {
+    attachCutCameraTracking(viewport);
+  } else {
+    detachCutCameraTracking(viewport);
+  }
 }
