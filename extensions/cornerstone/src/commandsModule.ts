@@ -45,7 +45,8 @@ import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 import toggleVOISliceSync from './utils/toggleVOISliceSync';
 import {
-  moveViewportActors,
+  applyVolumeCutPlane,
+  clearVolumeCutPlanes,
   resetViewportActorTransforms,
   shiftVolumeOpacityPointsWithSegmentation,
 } from './utils/shiftVolumeAndSegmentation';
@@ -2213,9 +2214,9 @@ function commandsModule({
       if (viewport.shiftedBy) {
         viewport.shiftedBy = 0;
       }
-      if (viewport.movedBy) {
-        viewport.movedBy = 0;
-      }
+      viewport.cutMode = 'observer';
+      viewport.cutOffset = 0;
+      clearVolumeCutPlanes(viewport);
       resetViewportActorTransforms(viewport);
       viewport.render();
     },
@@ -2256,17 +2257,19 @@ function commandsModule({
     },
 
     /**
-     * Spatially moves all actors (volume + segmentation) of a viewport together
-     * along the camera view direction.
+     * Applies a clipping plane ("cut") across all actors (volume render, merged
+     * labelmap and segment surfaces) of a viewport. The plane orientation is
+     * driven by the chosen mode and the cut depth by the signed offset.
      * @param {string} viewportId - The ID of the viewport.
-     * @param {number} move - Incremental distance in world units (mm).
+     * @param {('observer'|'coronal'|'sagittal'|'axial')} mode - Plane orientation.
+     * @param {number} offset - Signed cut depth in world units (mm); 0 clears it.
      */
-    moveVolumeWithSegmentation: ({ viewportId, move }) => {
+    setVolumeCutPlane: ({ viewportId, mode, offset }) => {
       const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
       if (!viewport) {
         return;
       }
-      moveViewportActors(viewport, move);
+      applyVolumeCutPlane(viewport, mode, offset);
     },
 
     /**
@@ -4404,8 +4407,8 @@ function commandsModule({
     shiftVolumeOpacityPoints: {
       commandFn: actions.shiftVolumeOpacityPoints,
     },
-    moveVolumeWithSegmentation: {
-      commandFn: actions.moveVolumeWithSegmentation,
+    setVolumeCutPlane: {
+      commandFn: actions.setVolumeCutPlane,
     },
     setVolumeLighting: {
       commandFn: actions.setVolumeLighting,

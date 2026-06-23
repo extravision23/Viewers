@@ -16,5 +16,9 @@
   "Diffuse": "Diffuse",
   "Specular": "Specular",
   "Shift": "Shift",
-  "Move": "Move"
+  "Move": "Move",
+  "Observer": "Observer",
+  "Coronal": "Coronal",
+  "Sagittal": "Sagittal",
+  "Axial": "Axial"
 }

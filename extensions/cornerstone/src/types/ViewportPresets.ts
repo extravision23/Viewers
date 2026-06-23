@@ -42,6 +42,8 @@ export type VolumeShiftProps = {
   viewportId: string;
 };
 
+export type VolumeCutMode = 'observer' | 'coronal' | 'sagittal' | 'axial';
+
 export type VolumeMoveProps = {
   viewportId: string;
 };
