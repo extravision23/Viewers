@@ -45,7 +45,7 @@ import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 import toggleVOISliceSync from './utils/toggleVOISliceSync';
 import {
-  applyVolumeCutPlane,
+  applyVolumeCutPlanes,
   clearVolumeCutPlanes,
   resetViewportActorTransforms,
   shiftVolumeOpacityPointsWithSegmentation,
@@ -2214,8 +2214,7 @@ function commandsModule({
       if (viewport.shiftedBy) {
         viewport.shiftedBy = 0;
       }
-      viewport.cutMode = 'observer';
-      viewport.cutOffset = 0;
+      viewport.cutPlanes = undefined;
       clearVolumeCutPlanes(viewport);
       resetViewportActorTransforms(viewport);
       viewport.render();
@@ -2257,19 +2256,19 @@ function commandsModule({
     },
 
     /**
-     * Applies a clipping plane ("cut") across all actors (volume render, merged
-     * labelmap and segment surfaces) of a viewport. The plane orientation is
-     * driven by the chosen mode and the cut depth by the signed offset.
+     * Applies a combination of clipping planes ("cuts") across all actors (volume
+     * render, merged labelmap and segment surfaces) of a viewport. Multiple planes
+     * intersect, so several anatomical cuts can be active simultaneously.
      * @param {string} viewportId - The ID of the viewport.
-     * @param {('observer'|'coronal'|'sagittal'|'axial')} mode - Plane orientation.
-     * @param {number} offset - Signed cut depth in world units (mm); 0 clears it.
+     * @param {Array<{mode:('observer'|'coronal'|'sagittal'|'axial'),offset:number}>} planes -
+     *   The active cut planes; entries with offset 0 are ignored.
      */
-    setVolumeCutPlane: ({ viewportId, mode, offset }) => {
+    setVolumeCutPlanes: ({ viewportId, planes }) => {
       const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
       if (!viewport) {
         return;
       }
-      applyVolumeCutPlane(viewport, mode, offset);
+      applyVolumeCutPlanes(viewport, planes);
     },
 
     /**
@@ -4407,8 +4406,8 @@ function commandsModule({
     shiftVolumeOpacityPoints: {
       commandFn: actions.shiftVolumeOpacityPoints,
     },
-    setVolumeCutPlane: {
-      commandFn: actions.setVolumeCutPlane,
+    setVolumeCutPlanes: {
+      commandFn: actions.setVolumeCutPlanes,
     },
     setVolumeLighting: {
       commandFn: actions.setVolumeLighting,
