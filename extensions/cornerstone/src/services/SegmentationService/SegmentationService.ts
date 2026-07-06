@@ -25,6 +25,7 @@ import { VOLUME_LOADER_SCHEME } from '../../constants';
 import { mapROIContoursToRTStructData } from './RTSTRUCT/mapROIContoursToRTStructData';
 import { SegmentationPresentation, SegmentationPresentationItem } from '../../types/Presentation';
 import { EasingFunctionEnum, EasingFunctionMap } from '../../utils/transitions';
+import { isSegmentBackfaceCullingEnabled } from '../../utils/shiftVolumeAndSegmentation';
 import { ViewReference } from '@cornerstonejs/core/types';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
@@ -2091,6 +2092,11 @@ class SegmentationService extends PubSubService {
       csToolsEnums.Events.ANNOTATION_CUT_MERGE_PROCESS_COMPLETED,
       this._onAnnotationCutMergeProcessCompletedFromSource
     );
+
+    eventTarget.addEventListener(
+      csToolsEnums.Events.SEGMENTATION_RENDERED,
+      this._onSegmentationRenderedFromSource
+    );
   }
 
   private getCornerstoneSegmentation(segmentationId: string) {
@@ -2361,6 +2367,61 @@ class SegmentationService extends PubSubService {
     this._broadcastEvent(this.EVENTS.SEGMENTATION_ANNOTATION_CUT_MERGE_PROCESS_COMPLETED, {
       segmentationId,
     });
+  };
+
+  /**
+   * Enables backface culling on segment surface actors of 3D viewports.
+   *
+   * Surface representations are hollow shells (isosurface meshes); without
+   * culling, the inner (back) wall of the shell shows through semi-transparent
+   * front faces and the segment reads as having a cavity inside. With backface
+   * culling the segment looks like a solid semi-transparent body.
+   *
+   * Surface actors are created lazily by Cornerstone after the PolySeg worker
+   * finishes, so this runs on every SEGMENTATION_RENDERED event and only
+   * touches actors that don't have culling enabled yet.
+   */
+  private _onSegmentationRenderedFromSource = (
+    evt: cstTypes.EventTypes.SegmentationRenderedEventType
+  ) => {
+    const { viewportId, type } = evt.detail;
+    if (type !== SURFACE) {
+      return;
+    }
+
+    const enabledElement = getEnabledElementByViewportId(viewportId);
+    const csViewport = enabledElement?.viewport;
+    if (csViewport?.type !== ViewportType.VOLUME_3D) {
+      return;
+    }
+
+    const cullingEnabled = isSegmentBackfaceCullingEnabled(
+      csViewport as csTypes.IVolumeViewport
+    );
+
+    let modified = false;
+    csViewport.getActors().forEach(actorEntry => {
+      const { actor, representationUID } = actorEntry as csTypes.ActorEntry & {
+        representationUID?: string;
+      };
+      const isMeshActor =
+        typeof (actor as unknown as { isA?: (name: string) => boolean }).isA === 'function' &&
+        (actor as unknown as { isA: (name: string) => boolean }).isA('vtkActor');
+      if (!representationUID || !isMeshActor) {
+        return;
+      }
+      const property = (actor as unknown as { getProperty?: () => unknown }).getProperty?.() as
+        | { getBackfaceCulling?: () => boolean; setBackfaceCulling?: (value: boolean) => void }
+        | undefined;
+      if (property?.getBackfaceCulling && property.getBackfaceCulling() !== cullingEnabled) {
+        property.setBackfaceCulling(cullingEnabled);
+        modified = true;
+      }
+    });
+
+    if (modified) {
+      csViewport.render();
+    }
   };
 
   /**

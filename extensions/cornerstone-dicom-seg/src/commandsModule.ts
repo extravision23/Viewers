@@ -740,6 +740,9 @@ const commandsModule = ({
           title: 'Preview 3D (GLB)',
           content: GlbPreviewDialog,
           shouldCloseOnEsc: true,
+          // The default DialogContent is w-full/max-w-md; let this dialog size
+          // itself to its (wide, resizable) content so centering is correct.
+          containerClassName: 'w-auto max-w-none',
           contentProps: {
             models: glbArtifacts.map(item => ({
               url: item.url,
