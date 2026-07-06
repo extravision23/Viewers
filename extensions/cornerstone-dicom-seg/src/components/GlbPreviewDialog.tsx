@@ -536,7 +536,21 @@ export default function GlbPreviewDialog({
   );
 
   return (
-    <div className="flex max-h-[90vh] w-[88vw] max-w-6xl flex-col gap-3">
+    <div
+      className="flex flex-col gap-3"
+      // Near-full-height by default; the bottom-right corner is a native CSS
+      // resize handle. The three.js canvas follows via its ResizeObserver.
+      style={{
+        width: '88vw',
+        height: 'calc(92vh - 6rem)',
+        minWidth: 640,
+        minHeight: 420,
+        maxWidth: '96vw',
+        maxHeight: 'calc(96vh - 5rem)',
+        resize: 'both',
+        overflow: 'hidden',
+      }}
+    >
       <div className="flex shrink-0 items-center justify-between gap-2">
         <div className="text-foreground text-base font-medium">{title || '3D Preview (GLB)'}</div>
         <button
@@ -548,10 +562,7 @@ export default function GlbPreviewDialog({
         </button>
       </div>
 
-      <div
-        className="flex min-h-0 flex-1 gap-3"
-        style={{ height: 'min(70vh, calc(90vh - 8rem))' }}
-      >
+      <div className="flex min-h-0 flex-1 gap-3">
         {resolvedModels.length > 0 &&
           (legendItems.length > 0 ? (
             renderSegmentSidebar()
@@ -574,7 +585,7 @@ export default function GlbPreviewDialog({
           </div>
 
           <div className="text-muted-foreground shrink-0 text-xs">
-            Mouse: rotate | Shift + drag: pan | Wheel: zoom
+            Mouse: rotate | Shift + drag: pan | Wheel: zoom | Drag bottom-right corner to resize
             {hasVertexColors ? ' · Anatomy blend uses CT intensity baked into the mesh.' : ''}
           </div>
         </div>

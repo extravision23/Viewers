@@ -20,5 +20,9 @@
   "Observer": "Observer",
   "Coronal": "Coronal",
   "Sagittal": "Sagittal",
-  "Axial": "Axial"
+  "Axial": "Axial",
+  "Segment cuts": "Segment cuts",
+  "Hollow": "Hollow",
+  "Hybrid": "Hybrid",
+  "Solid": "Solid"
 }

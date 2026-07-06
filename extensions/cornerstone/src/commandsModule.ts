@@ -48,6 +48,7 @@ import {
   applyVolumeCutPlanes,
   clearVolumeCutPlanes,
   resetViewportActorTransforms,
+  setSegmentCutRenderMode,
   shiftVolumeOpacityPointsWithSegmentation,
 } from './utils/shiftVolumeAndSegmentation';
 import {
@@ -2272,6 +2273,24 @@ function commandsModule({
     },
 
     /**
+     * Sets how segment surfaces are cut in a 3D viewport:
+     * - 'hollow': legacy - bare GPU clipping planes, hollow shell visible. Fastest.
+     * - 'hybrid' (default): GPU planes during interaction, capped solid-looking
+     *   clip computed once interaction pauses.
+     * - 'solid': capped clip recomputed synchronously on every change (slow on
+     *   large meshes).
+     * @param {string} viewportId - The ID of the viewport.
+     * @param {('hollow'|'hybrid'|'solid')} mode - The segment cut render mode.
+     */
+    setSegmentCutRenderMode: ({ viewportId, mode }) => {
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+      if (!viewport) {
+        return;
+      }
+      setSegmentCutRenderMode(viewport, mode);
+    },
+
+    /**
      * Sets the volume lighting settings for a given viewport.
      * @param {string} viewportId - The ID of the viewport to set the lighting settings.
      * @param {Object} options - The lighting settings to be set.
@@ -4408,6 +4427,9 @@ function commandsModule({
     },
     setVolumeCutPlanes: {
       commandFn: actions.setVolumeCutPlanes,
+    },
+    setSegmentCutRenderMode: {
+      commandFn: actions.setSegmentCutRenderMode,
     },
     setVolumeLighting: {
       commandFn: actions.setVolumeLighting,
