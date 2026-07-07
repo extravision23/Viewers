@@ -42,6 +42,7 @@ import { usePositionPresentationStore } from './stores/usePositionPresentationSt
 import { useSegmentationPresentationStore } from './stores/useSegmentationPresentationStore';
 import { imageRetrieveMetadataProvider } from '@cornerstonejs/core/utilities';
 import { initializeWebWorkerProgressHandler } from './utils/initWebWorkerProgressHandler';
+import { isVolumetricSegmentVolumeId } from './utils/volumetricSegmentDisplay';
 
 const { registerColormap } = csUtilities.colormap;
 
@@ -282,6 +283,10 @@ export default async function init({
               // Hide volume completely for Surface representation
               const volumeIds = csViewport.getAllVolumeIds();
               volumeIds.forEach(volId => {
+                if (isVolumetricSegmentVolumeId(viewportId, volId)) {
+                  // Labelmap volume of the volumetric segment mode - keep it.
+                  return;
+                }
                 csViewport.setProperties(
                   {
                     colormap: {
@@ -339,6 +344,10 @@ export default async function init({
                 const volumeIds = csViewport.getAllVolumeIds();
                 if (volumeIds.length > 0) {
                   volumeIds.forEach(volId => {
+                    if (isVolumetricSegmentVolumeId(viewportId, volId)) {
+                      // Labelmap volume of the volumetric segment mode - keep it.
+                      return;
+                    }
                     csViewport.setProperties(
                       {
                         colormap: {

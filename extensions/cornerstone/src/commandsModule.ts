@@ -2273,14 +2273,17 @@ function commandsModule({
     },
 
     /**
-     * Sets how segment surfaces are cut in a 3D viewport:
-     * - 'hollow': legacy - bare GPU clipping planes, hollow shell visible. Fastest.
-     * - 'hybrid' (default): GPU planes during interaction, capped solid-looking
-     *   clip computed once interaction pauses.
-     * - 'solid': capped clip recomputed synchronously on every change (slow on
-     *   large meshes).
+     * Sets how segmentations are rendered/cut in a 3D viewport:
+     * - 'hollow': legacy - surface meshes with bare GPU clipping planes, hollow
+     *   shell visible. Fastest.
+     * - 'hybrid' (default): surface meshes; GPU planes during interaction,
+     *   capped solid-looking clip computed once interaction pauses.
+     * - 'solid': surface meshes; capped clip recomputed synchronously on every
+     *   change (slow on large meshes).
+     * - 'volumetric': labelmap volume GPU ray-cast instead of surface meshes;
+     *   filled by nature, cuts are free, voxelized look.
      * @param {string} viewportId - The ID of the viewport.
-     * @param {('hollow'|'hybrid'|'solid')} mode - The segment cut render mode.
+     * @param {('hollow'|'hybrid'|'solid'|'volumetric')} mode - The segment render mode.
      */
     setSegmentCutRenderMode: ({ viewportId, mode }) => {
       const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);

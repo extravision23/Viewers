@@ -11,15 +11,19 @@ const MODES: { value: SegmentCutRenderMode; label: string }[] = [
   { value: 'hollow', label: 'Hollow' },
   { value: 'hybrid', label: 'Hybrid' },
   { value: 'solid', label: 'Solid' },
+  { value: 'volumetric', label: 'Volumetric' },
 ];
 
 /**
- * Three-way switch for how segment surfaces are cut in the 3D view:
+ * Switch for how segmentations are rendered/cut in the 3D view:
  * - Hollow: legacy GPU clipping planes, the empty inside of the shell is
  *   visible at the cut. Fastest.
  * - Hybrid: GPU planes while interacting, capped (solid) clip once interaction
  *   pauses.
- * - Solid: capped clip recomputed on every change. Always solid, slowest.
+ * - Solid: capped clip recomputed on every change. Always solid, slowest cuts.
+ * - Volumetric: labelmap volume is GPU ray-cast instead of surface meshes;
+ *   filled by nature, cuts are free, but voxelized look and higher per-frame
+ *   cost.
  */
 export function VolumeSegmentCutMode({ viewportId }: { viewportId: string }): ReactElement {
   const { t } = useTranslation('WindowLevelActionMenu');

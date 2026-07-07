@@ -1,8 +1,13 @@
 import { Types, Enums } from '@cornerstonejs/core';
+import { utilities as cstToolsUtils } from '@cornerstonejs/tools';
 import { mat4, vec3 } from 'gl-matrix';
 import vtkPlane from '@kitware/vtk.js/Common/DataModel/Plane';
 import vtkClipClosedSurface from '@kitware/vtk.js/Filters/General/ClipClosedSurface';
 import type { VolumeCutMode } from '../types/ViewportPresets';
+import {
+  enableVolumetricSegments,
+  disableVolumetricSegments,
+} from './volumetricSegmentDisplay';
 
 type CutPlaneConfig = { mode: VolumeCutMode; offset: number };
 
@@ -24,15 +29,18 @@ type SolidCutState = {
 const solidCutStates = new WeakMap<object, SolidCutState>();
 
 /**
- * How segment surfaces are cut in a 3D viewport:
- * - 'hollow': legacy behavior - bare GPU clipping planes, the empty inside of
- *   the mesh shell is visible at the cut. Fastest.
- * - 'hybrid': GPU clipping planes during interaction, capped (solid-looking)
- *   clip computed once interaction pauses. Default.
- * - 'solid': capped clip recomputed synchronously on every change. Always
- *   solid, but slow on large meshes / observer-mode rotation.
+ * How segmentations are rendered/cut in a 3D viewport:
+ * - 'hollow': legacy behavior - surface meshes with bare GPU clipping planes,
+ *   the empty inside of the mesh shell is visible at the cut. Fastest.
+ * - 'hybrid': surface meshes; GPU clipping planes during interaction, capped
+ *   (solid-looking) clip computed once interaction pauses. Default.
+ * - 'solid': surface meshes; capped clip recomputed synchronously on every
+ *   change. Always solid, but slow on large meshes / observer-mode rotation.
+ * - 'volumetric': the labelmap volume is GPU ray-cast instead of surface
+ *   meshes. Filled by nature, cuts are free (shader clipping planes), but the
+ *   look is voxelized and per-frame rendering cost is higher.
  */
-export type SegmentCutRenderMode = 'hollow' | 'hybrid' | 'solid';
+export type SegmentCutRenderMode = 'hollow' | 'hybrid' | 'solid' | 'volumetric';
 
 export function getSegmentCutRenderMode(viewport: Types.IVolumeViewport): SegmentCutRenderMode {
   return viewport.__segmentCutRenderMode ?? 'hybrid';
@@ -41,21 +49,41 @@ export function getSegmentCutRenderMode(viewport: Types.IVolumeViewport): Segmen
 /**
  * Whether segment surfaces should render with backface culling (hides the
  * inner wall of the shell so semi-transparent segments look solid). Applies to
- * both capped modes; 'hollow' keeps the legacy two-sided look.
+ * both capped modes; 'hollow' keeps the legacy two-sided look. Irrelevant in
+ * 'volumetric' (surfaces are hidden there), where it stays enabled.
  */
 export function isSegmentBackfaceCullingEnabled(viewport: Types.IVolumeViewport): boolean {
   return getSegmentCutRenderMode(viewport) !== 'hollow';
 }
 
 /**
- * Sets the segment cut render mode for a viewport: updates backface culling on
- * all segment surface actors and re-applies any active cut planes in the new
- * mode.
+ * Shows/hides the segment surface mesh actors of the viewport. Used when
+ * entering/leaving volumetric mode. Cornerstone re-applies per-segment
+ * visibility from its own state on the next segmentation render, so a plain
+ * triggerSegmentationRender reconciles user-hidden segments after re-show.
+ */
+function setSurfaceMeshActorsVisible(viewport: Types.IVolumeViewport, visible: boolean): void {
+  viewport.getActors().forEach(entry => {
+    const { actor, representationUID } = entry as Types.ActorEntry & {
+      representationUID?: string;
+    };
+    if (!representationUID || !isSurfaceMeshActor(actor)) {
+      return;
+    }
+    (actor as unknown as { setVisibility: (v: boolean) => void }).setVisibility(visible);
+  });
+}
+
+/**
+ * Sets the segment render mode for a viewport: switches between surface-based
+ * modes and the volumetric labelmap mode, updates backface culling, and
+ * re-applies any active cut planes in the new mode.
  */
 export function setSegmentCutRenderMode(
   viewport: Types.IVolumeViewport,
   mode: SegmentCutRenderMode
 ): void {
+  const previousMode = getSegmentCutRenderMode(viewport);
   viewport.__segmentCutRenderMode = mode;
   const culling = mode !== 'hollow';
 
@@ -69,8 +97,31 @@ export function setSegmentCutRenderMode(
     property?.setBackfaceCulling?.(culling);
   });
 
-  renderCutPlanes(viewport, (viewport.__cutPlanesConfig as CutPlaneConfig[]) ?? []);
-  viewport.render();
+  const reapplyCuts = () => {
+    renderCutPlanes(viewport, (viewport.__cutPlanesConfig as CutPlaneConfig[]) ?? []);
+    viewport.render();
+  };
+
+  if (mode === 'volumetric') {
+    setSurfaceMeshActorsVisible(viewport, false);
+    enableVolumetricSegments(viewport)
+      .then(reapplyCuts)
+      .catch(error => {
+        console.warn('[setSegmentCutRenderMode] enabling volumetric mode failed:', error);
+        reapplyCuts();
+      });
+    return;
+  }
+
+  if (previousMode === 'volumetric') {
+    disableVolumetricSegments(viewport);
+    setSurfaceMeshActorsVisible(viewport, true);
+    // Reconcile per-segment visibility with cornerstone state (a user may have
+    // hidden individual segments while in volumetric mode).
+    cstToolsUtils.segmentation.triggerSegmentationRender?.(viewport.id);
+  }
+
+  reapplyCuts();
 }
 
 /** Surface meshes (segments) are vtkActor; volumes are vtkVolume. */
@@ -407,6 +458,8 @@ function scheduleCappedClip(viewport: Types.IVolumeViewport): void {
  * - 'hollow': fast GPU clipping planes only.
  * - 'hybrid': GPU planes now, capped clip deferred until interaction pauses.
  * - 'solid': capped clip computed synchronously right here.
+ * - 'volumetric': surface meshes are hidden; labelmap volume actors get the
+ *   same GPU clipping planes (filled cuts, no CPU mesh work).
  */
 function renderCutPlanes(viewport: Types.IVolumeViewport, planes: CutPlaneConfig[]): void {
   const vtkPlanes = computeVtkPlanes(viewport, planes);

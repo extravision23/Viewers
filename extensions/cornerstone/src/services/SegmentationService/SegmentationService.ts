@@ -25,7 +25,11 @@ import { VOLUME_LOADER_SCHEME } from '../../constants';
 import { mapROIContoursToRTStructData } from './RTSTRUCT/mapROIContoursToRTStructData';
 import { SegmentationPresentation, SegmentationPresentationItem } from '../../types/Presentation';
 import { EasingFunctionEnum, EasingFunctionMap } from '../../utils/transitions';
-import { isSegmentBackfaceCullingEnabled } from '../../utils/shiftVolumeAndSegmentation';
+import {
+  getSegmentCutRenderMode,
+  isSegmentBackfaceCullingEnabled,
+} from '../../utils/shiftVolumeAndSegmentation';
+import { refreshVolumetricSegmentsIfEnabled } from '../../utils/volumetricSegmentDisplay';
 import { ViewReference } from '@cornerstonejs/core/types';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
@@ -2398,6 +2402,8 @@ class SegmentationService extends PubSubService {
     const cullingEnabled = isSegmentBackfaceCullingEnabled(
       csViewport as csTypes.IVolumeViewport
     );
+    const isVolumetricMode =
+      getSegmentCutRenderMode(csViewport as csTypes.IVolumeViewport) === 'volumetric';
 
     let modified = false;
     csViewport.getActors().forEach(actorEntry => {
@@ -2410,7 +2416,21 @@ class SegmentationService extends PubSubService {
       if (!representationUID || !isMeshActor) {
         return;
       }
-      const property = (actor as unknown as { getProperty?: () => unknown }).getProperty?.() as
+
+      // In volumetric mode surface meshes stay hidden; cornerstone re-applies
+      // visibility from its own state on every segmentation render, so we
+      // re-hide them here after each render.
+      const meshActor = actor as unknown as {
+        getVisibility: () => boolean;
+        setVisibility: (v: boolean) => void;
+        getProperty?: () => unknown;
+      };
+      if (isVolumetricMode && meshActor.getVisibility()) {
+        meshActor.setVisibility(false);
+        modified = true;
+      }
+
+      const property = meshActor.getProperty?.() as
         | { getBackfaceCulling?: () => boolean; setBackfaceCulling?: (value: boolean) => void }
         | undefined;
       if (property?.getBackfaceCulling && property.getBackfaceCulling() !== cullingEnabled) {
@@ -2421,6 +2441,14 @@ class SegmentationService extends PubSubService {
 
     if (modified) {
       csViewport.render();
+    }
+
+    if (isVolumetricMode) {
+      // Labelmap volume may become ready only after surface meshes finish
+      // loading; pick up any segmentations that were not yet volumetric.
+      refreshVolumetricSegmentsIfEnabled(csViewport as csTypes.IVolumeViewport).catch(error =>
+        console.warn('[SegmentationService] volumetric refresh failed:', error)
+      );
     }
   };
 
