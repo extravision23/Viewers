@@ -38,6 +38,7 @@ import { usePositionPresentationStore } from '../../stores/usePositionPresentati
 import { useSynchronizersStore } from '../../stores/useSynchronizersStore';
 import { useSegmentationPresentationStore } from '../../stores/useSegmentationPresentationStore';
 import getClosestOrientationFromIOP from '../../utils/isReferenceViewable';
+import { isVolumetricSegmentVolumeId } from '../../utils/volumetricSegmentDisplay';
 
 const EVENTS = {
   VIEWPORT_DATA_CHANGED: 'event::cornerstoneViewportService:viewportDataChanged',
@@ -1529,6 +1530,10 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
               const volumeIds = viewport.getAllVolumeIds();
               if (volumeIds.length > 0) {
                 volumeIds.forEach(volId => {
+                  if (isVolumetricSegmentVolumeId(viewport.id, volId)) {
+                    // Labelmap volume of the volumetric segment mode - keep it.
+                    return;
+                  }
                   if (hasSurfaceRepresentation) {
                     // Hide volume completely for Surface representation (segments only)
                     viewport.setProperties(
