@@ -51,6 +51,7 @@ import {
   setSegmentCutRenderMode,
   shiftVolumeOpacityPointsWithSegmentation,
 } from './utils/shiftVolumeAndSegmentation';
+import { applyLightingToVolumetricSegmentActors } from './utils/volumetricSegmentDisplay';
 import {
   usePositionPresentationStore,
   useSegmentationPresentationStore,
@@ -2305,24 +2306,29 @@ function commandsModule({
 
     setVolumeLighting: ({ viewportId, options }) => {
       const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
-      const { actor } = viewport.getActors()[0];
-      const property = actor.getProperty();
+      const defaultActorEntry = viewport.getDefaultActor?.() ?? viewport.getActors()[0];
+      const property = defaultActorEntry?.actor?.getProperty?.();
 
-      if (options.shade !== undefined) {
-        property.setShade(options.shade);
+      if (property) {
+        if (options.shade !== undefined) {
+          property.setShade(options.shade);
+        }
+
+        if (options.ambient !== undefined) {
+          property.setAmbient(options.ambient);
+        }
+
+        if (options.diffuse !== undefined) {
+          property.setDiffuse(options.diffuse);
+        }
+
+        if (options.specular !== undefined) {
+          property.setSpecular(options.specular);
+        }
       }
 
-      if (options.ambient !== undefined) {
-        property.setAmbient(options.ambient);
-      }
-
-      if (options.diffuse !== undefined) {
-        property.setDiffuse(options.diffuse);
-      }
-
-      if (options.specular !== undefined) {
-        property.setSpecular(options.specular);
-      }
+      // Volumetric segment labelmap actors use the same Phong lighting model.
+      applyLightingToVolumetricSegmentActors(viewport, options);
 
       viewport.render();
     },
