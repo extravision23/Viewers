@@ -12,6 +12,92 @@ import vtkPiecewiseFunction from '@kitware/vtk.js/Common/DataModel/PiecewiseFunc
 
 const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 
+export type VolumetricSegmentLighting = {
+  shade?: boolean;
+  ambient?: number;
+  diffuse?: number;
+  specular?: number;
+  specularPower?: number;
+};
+
+/** Default lighting when the anatomy volume has not been configured yet. */
+const DEFAULT_VOLUMETRIC_LIGHTING: Required<VolumetricSegmentLighting> = {
+  shade: true,
+  ambient: 0.2,
+  diffuse: 0.75,
+  specular: 0.15,
+  specularPower: 20,
+};
+
+/**
+ * Phong lighting on a volumetric labelmap actor. Gradients exist at segment
+ * boundaries and outer surfaces, so shading adds depth without hollowing the
+ * fill (unlike gradient-opacity, which would emphasize edges only).
+ */
+export function applyVolumetricSegmentLighting(
+  property: {
+    setShade?: (v: boolean) => void;
+    setAmbient?: (v: number) => void;
+    setDiffuse?: (v: number) => void;
+    setSpecular?: (v: number) => void;
+    setSpecularPower?: (v: number) => void;
+  },
+  options: VolumetricSegmentLighting = DEFAULT_VOLUMETRIC_LIGHTING
+): void {
+  const merged = { ...DEFAULT_VOLUMETRIC_LIGHTING, ...options };
+  property.setShade?.(merged.shade);
+  property.setAmbient?.(merged.ambient);
+  property.setDiffuse?.(merged.diffuse);
+  property.setSpecular?.(merged.specular);
+  property.setSpecularPower?.(merged.specularPower);
+}
+
+/** Reads shade/ambient/diffuse/specular from the anatomy (default) volume actor. */
+export function getAnatomyVolumeLighting(
+  viewport: Types.IVolumeViewport
+): VolumetricSegmentLighting {
+  const defaultEntry = viewport.getDefaultActor?.() ?? viewport.getActors()[0];
+  const property = defaultEntry?.actor?.getProperty?.() as
+    | {
+        getShade?: () => boolean;
+        getAmbient?: () => number;
+        getDiffuse?: () => number;
+        getSpecular?: () => number;
+        getSpecularPower?: () => number;
+      }
+    | undefined;
+  if (!property) {
+    return DEFAULT_VOLUMETRIC_LIGHTING;
+  }
+  return {
+    shade: property.getShade?.() ?? DEFAULT_VOLUMETRIC_LIGHTING.shade,
+    ambient: property.getAmbient?.() ?? DEFAULT_VOLUMETRIC_LIGHTING.ambient,
+    diffuse: property.getDiffuse?.() ?? DEFAULT_VOLUMETRIC_LIGHTING.diffuse,
+    specular: property.getSpecular?.() ?? DEFAULT_VOLUMETRIC_LIGHTING.specular,
+    specularPower: property.getSpecularPower?.() ?? DEFAULT_VOLUMETRIC_LIGHTING.specularPower,
+  };
+}
+
+/**
+ * Applies lighting options to every volumetric segment labelmap actor on the
+ * viewport (used when the user adjusts Shade / Lighting on the presets panel).
+ */
+export function applyLightingToVolumetricSegmentActors(
+  viewport: Types.IVolumeViewport,
+  options: VolumetricSegmentLighting
+): void {
+  const state = volumetricStates.get(viewport.id);
+  if (!state?.entries.length) {
+    return;
+  }
+  state.entries.forEach(({ actorUID }) => {
+    const actorEntry = getVolumetricActorEntry(viewport, actorUID);
+    if (actorEntry?.actor?.getProperty) {
+      applyVolumetricSegmentLighting(actorEntry.actor.getProperty(), options);
+    }
+  });
+}
+
 /**
  * Volumetric display of segmentations on a 3D viewport: the labelmap volume is
  * ray-cast by the GPU as a separate vtkVolume actor, with per-segment-index
@@ -146,8 +232,10 @@ function applyLabelmapTransferFunctions(
   // Nearest interpolation keeps label indices exact (no blending between
   // neighboring segment indices producing wrong colors).
   property.setInterpolationTypeToNearest();
-  property.setShade?.(false);
   property.setUseGradientOpacity?.(0, false);
+  // Match anatomy volume lighting so Shade / Ambient / Diffuse on the presets
+  // panel also affect segment surfaces (reduces flat "cartoon" look).
+  applyVolumetricSegmentLighting(property, getAnatomyVolumeLighting(viewport));
 }
 
 function getVolumetricActorEntry(viewport: Types.IVolumeViewport, actorUID: string) {
