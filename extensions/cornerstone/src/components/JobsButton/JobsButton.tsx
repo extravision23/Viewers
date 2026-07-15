@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSystem } from '@ohif/core';
 import { Button, Icons, Popover, PopoverTrigger, PopoverContent } from '@ohif/ui-next';
 import { getFunctionsBaseUrl } from '../../../../../platform/app/src/utils/buildFunctionUrl';
 
 const PAGE_SIZE = 5;
+// While the popover is open, re-fetch to keep in-progress stage bars live.
+const POLL_INTERVAL_MS = 5000;
 
 interface Operation {
   operation_id: string;
@@ -13,6 +15,37 @@ interface Operation {
   series_id: string;
   status: string | null;
   created_at: string;
+  stage?: number | null;
+  stage_count?: number | null;
+  stage_label?: string | null;
+}
+
+function StageBar({
+  stage,
+  stageCount,
+  stageLabel,
+}: {
+  stage: number;
+  stageCount: number;
+  stageLabel?: string | null;
+}) {
+  return (
+    <div className="mt-1">
+      <div className="flex gap-0.5">
+        {Array.from({ length: stageCount }, (_, i) => i + 1).map(i => (
+          <div
+            key={i}
+            className={`h-1 flex-1 rounded-sm ${
+              i < stage ? 'bg-primary-light' : i === stage ? 'bg-primary-main' : 'bg-black'
+            }`}
+          />
+        ))}
+      </div>
+      {stageLabel ? (
+        <div className="mt-0.5 text-center text-[10px] text-white">{stageLabel}</div>
+      ) : null}
+    </div>
+  );
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -63,6 +96,13 @@ function OperationRow({ operation }: { operation: Operation }) {
         >
           Series: …{operation.series_id?.slice(-12)}
         </div>
+        {status === 'InProgress' && operation.stage_count ? (
+          <StageBar
+            stage={operation.stage ?? 0}
+            stageCount={operation.stage_count}
+            stageLabel={operation.stage_label}
+          />
+        ) : null}
       </div>
       <div className={`shrink-0 text-xs font-semibold ${color}`}>{label}</div>
     </div>
@@ -74,6 +114,7 @@ export function JobsButton() {
   const [operations, setOperations] = useState<Operation[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
+  const [isOpen, setIsOpen] = useState(false);
 
   const fetchOperations = async () => {
     try {
@@ -108,8 +149,23 @@ export function JobsButton() {
   const totalPages = Math.ceil((operations?.length ?? 0) / PAGE_SIZE);
   const paginated = operations?.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE) ?? [];
 
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    const interval = setInterval(fetchOperations, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [isOpen]);
+
   return (
-    <Popover onOpenChange={open => open && fetchOperations()}>
+    <Popover
+      onOpenChange={open => {
+        setIsOpen(open);
+        if (open) {
+          fetchOperations();
+        }
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
