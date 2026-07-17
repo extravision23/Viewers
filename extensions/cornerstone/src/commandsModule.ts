@@ -51,7 +51,12 @@ import {
   setSegmentCutRenderMode,
   shiftVolumeOpacityPointsWithSegmentation,
 } from './utils/shiftVolumeAndSegmentation';
-import { applyLightingToVolumetricSegmentActors } from './utils/volumetricSegmentDisplay';
+import {
+  applyLightingToSurfaceSegmentActors,
+  applyLightingToVolumetricSegmentActors,
+  DEFAULT_SURFACE_SEGMENT_LIGHTING,
+} from './utils/volumetricSegmentDisplay';
+import { setSurfaceMaterialPreviewColors as applySurfaceMaterialPreviewColors } from './utils/surfaceSegmentMaterials';
 import {
   usePositionPresentationStore,
   useSegmentationPresentationStore,
@@ -2275,12 +2280,10 @@ function commandsModule({
 
     /**
      * Sets how segmentations are rendered/cut in a 3D viewport:
-     * - 'hollow': legacy - surface meshes with bare GPU clipping planes, hollow
-     *   shell visible. Fastest.
-     * - 'hybrid' (default): surface meshes; GPU planes during interaction,
-     *   capped solid-looking clip computed once interaction pauses.
-     * - 'solid': surface meshes; capped clip recomputed synchronously on every
-     *   change (slow on large meshes).
+     * - 'hollow': surface meshes with GPU clipping planes; two-sided at the cut.
+     * - 'hybrid' (default): GPU clipping + backface culling; open cut (no flat
+     *   capped lids).
+     * - 'solid': same open GPU cut as hybrid; use 'volumetric' for filled cuts.
      * - 'volumetric': labelmap volume GPU ray-cast instead of surface meshes;
      *   filled by nature, cuts are free, voxelized look.
      * @param {string} viewportId - The ID of the viewport.
@@ -2292,6 +2295,18 @@ function commandsModule({
         return;
       }
       setSegmentCutRenderMode(viewport, mode);
+    },
+
+    /**
+     * Replaces rainbow segment LUT colors with neutral material preview tones
+     * (or restores LUT colors) so surface shaders are easier to evaluate.
+     */
+    setSurfaceMaterialPreviewColors: ({ viewportId, enabled }) => {
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+      if (!viewport) {
+        return;
+      }
+      applySurfaceMaterialPreviewColors(viewport, enabled);
     },
 
     /**
@@ -2329,6 +2344,11 @@ function commandsModule({
 
       // Volumetric segment labelmap actors use the same Phong lighting model.
       applyLightingToVolumetricSegmentActors(viewport, options);
+      // Surface segment meshes get glossy Phong (KaloLumen-like) from the same controls.
+      applyLightingToSurfaceSegmentActors(viewport, {
+        ...DEFAULT_SURFACE_SEGMENT_LIGHTING,
+        ...options,
+      });
 
       viewport.render();
     },
@@ -4439,6 +4459,9 @@ function commandsModule({
     },
     setSegmentCutRenderMode: {
       commandFn: actions.setSegmentCutRenderMode,
+    },
+    setSurfaceMaterialPreviewColors: {
+      commandFn: actions.setSurfaceMaterialPreviewColors,
     },
     setVolumeLighting: {
       commandFn: actions.setVolumeLighting,

@@ -30,18 +30,33 @@ const DEFAULT_VOLUMETRIC_LIGHTING: Required<VolumetricSegmentLighting> = {
 };
 
 /**
+ * Glossy Phong defaults for surface segment meshes (KaloLumen-like "wet organ"
+ * look). Higher specular than the volume defaults.
+ */
+export const DEFAULT_SURFACE_SEGMENT_LIGHTING: Required<VolumetricSegmentLighting> = {
+  shade: true,
+  ambient: 0.2,
+  diffuse: 0.7,
+  specular: 0.5,
+  specularPower: 30,
+};
+
+type PhongProperty = {
+  setShade?: (v: boolean) => void;
+  setAmbient?: (v: number) => void;
+  setDiffuse?: (v: number) => void;
+  setSpecular?: (v: number) => void;
+  setSpecularPower?: (v: number) => void;
+  setInterpolationToPhong?: () => void;
+};
+
+/**
  * Phong lighting on a volumetric labelmap actor. Gradients exist at segment
  * boundaries and outer surfaces, so shading adds depth without hollowing the
  * fill (unlike gradient-opacity, which would emphasize edges only).
  */
 export function applyVolumetricSegmentLighting(
-  property: {
-    setShade?: (v: boolean) => void;
-    setAmbient?: (v: number) => void;
-    setDiffuse?: (v: number) => void;
-    setSpecular?: (v: number) => void;
-    setSpecularPower?: (v: number) => void;
-  },
+  property: PhongProperty,
   options: VolumetricSegmentLighting = DEFAULT_VOLUMETRIC_LIGHTING
 ): void {
   const merged = { ...DEFAULT_VOLUMETRIC_LIGHTING, ...options };
@@ -50,6 +65,51 @@ export function applyVolumetricSegmentLighting(
   property.setDiffuse?.(merged.diffuse);
   property.setSpecular?.(merged.specular);
   property.setSpecularPower?.(merged.specularPower);
+}
+
+/**
+ * Glossy Phong lighting on a surface segment mesh actor (vtkActor property).
+ */
+export function applySurfaceSegmentLighting(
+  property: PhongProperty,
+  options: VolumetricSegmentLighting = DEFAULT_SURFACE_SEGMENT_LIGHTING
+): void {
+  const merged = { ...DEFAULT_SURFACE_SEGMENT_LIGHTING, ...options };
+  property.setShade?.(merged.shade);
+  property.setAmbient?.(merged.ambient);
+  property.setDiffuse?.(merged.diffuse);
+  property.setSpecular?.(merged.specular);
+  property.setSpecularPower?.(merged.specularPower);
+  property.setInterpolationToPhong?.();
+}
+
+function isSurfaceMeshActorLocal(actor: Types.Actor): boolean {
+  return typeof (actor as unknown as { isA?: (name: string) => boolean }).isA === 'function'
+    ? (actor as unknown as { isA: (name: string) => boolean }).isA('vtkActor')
+    : false;
+}
+
+/**
+ * Applies glossy Phong lighting to every surface segment mesh actor on the
+ * viewport (used when the user adjusts Shade / Lighting, and when new surfaces
+ * are created by PolySeg).
+ */
+export function applyLightingToSurfaceSegmentActors(
+  viewport: Types.IVolumeViewport,
+  options: VolumetricSegmentLighting = DEFAULT_SURFACE_SEGMENT_LIGHTING
+): void {
+  viewport.getActors().forEach(entry => {
+    const { actor, representationUID } = entry as Types.ActorEntry & {
+      representationUID?: string;
+    };
+    if (!representationUID || !isSurfaceMeshActorLocal(actor)) {
+      return;
+    }
+    const property = (actor as unknown as { getProperty?: () => PhongProperty }).getProperty?.();
+    if (property) {
+      applySurfaceSegmentLighting(property, options);
+    }
+  });
 }
 
 /** Reads shade/ambient/diffuse/specular from the anatomy (default) volume actor. */
