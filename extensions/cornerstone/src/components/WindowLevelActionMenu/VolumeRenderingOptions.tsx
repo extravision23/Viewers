@@ -6,6 +6,7 @@ import { VolumeMove } from './VolumeMove';
 import { VolumeLighting } from './VolumeLighting';
 import { VolumeShade } from './VolumeShade';
 import { VolumeSegmentCutMode } from './VolumeSegmentCutMode';
+import { VolumeSurfaceMaterialPreview } from './VolumeSurfaceMaterialPreview';
 import { useViewportRendering } from '../../hooks/useViewportRendering';
 import { useTranslation } from 'react-i18next';
 import { useSystem } from '@ohif/core';
@@ -58,9 +59,16 @@ export function VolumeRenderingOptionsContent({
       />
       <VolumeShift viewportId={viewportId} />
       <VolumeMove viewportId={viewportId} />
-      <div className="hover:bg-accent mt-1 flex h-8 w-full flex-shrink-0 items-center px-2 text-base hover:rounded">
-        <VolumeSegmentCutMode viewportId={viewportId} />
-      </div>
+      {viewportId ? (
+        <>
+          <div className="hover:bg-accent mt-1 flex h-8 w-full flex-shrink-0 items-center px-2 text-base hover:rounded">
+            <VolumeSegmentCutMode viewportId={viewportId} />
+          </div>
+          <div className="hover:bg-accent flex h-8 w-full flex-shrink-0 items-center px-2 text-base hover:rounded">
+            <VolumeSurfaceMaterialPreview viewportId={viewportId} />
+          </div>
+        </>
+      ) : null}
       <div className="mt-2 flex h-8 !h-[20px] w-full flex-shrink-0 items-center justify-start px-2 text-base">
         <div className="text-muted-foreground text-sm">{t('Lighting')}</div>
       </div>

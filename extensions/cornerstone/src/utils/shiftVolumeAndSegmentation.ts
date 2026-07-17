@@ -2,7 +2,6 @@ import { Types, Enums } from '@cornerstonejs/core';
 import { utilities as cstToolsUtils } from '@cornerstonejs/tools';
 import { mat4, vec3 } from 'gl-matrix';
 import vtkPlane from '@kitware/vtk.js/Common/DataModel/Plane';
-import vtkClipClosedSurface from '@kitware/vtk.js/Filters/General/ClipClosedSurface';
 import type { VolumeCutMode } from '../types/ViewportPresets';
 import {
   enableVolumetricSegments,
@@ -12,16 +11,12 @@ import {
 type CutPlaneConfig = { mode: VolumeCutMode; offset: number };
 
 /**
- * Per-actor state for "solid" cutting of segment surface meshes. Surface meshes
- * are hollow shells (flying-edges isosurfaces), so instead of bare mapper
- * clipping planes we clip the polydata with vtkClipClosedSurface, which caps the
- * cut cross-section and makes the segment look solid.
+ * Cache for leftover capped-mesh polydata from older sessions. Restoring the
+ * original geometry keeps GPU clipping planes working on the real surface.
  */
 type SolidCutState = {
   originalPolyData: unknown;
   clippedPolyData?: unknown;
-  /** Signature of the planes used for the last clip, to skip redundant recomputes. */
-  lastPlanesKey?: string;
 };
 
 // vtk.js freezes its publicAPI objects, so the state cannot live on the actor
@@ -30,12 +25,13 @@ const solidCutStates = new WeakMap<object, SolidCutState>();
 
 /**
  * How segmentations are rendered/cut in a 3D viewport:
- * - 'hollow': legacy behavior - surface meshes with bare GPU clipping planes,
- *   the empty inside of the mesh shell is visible at the cut. Fastest.
- * - 'hybrid': surface meshes; GPU clipping planes during interaction, capped
- *   (solid-looking) clip computed once interaction pauses. Default.
- * - 'solid': surface meshes; capped clip recomputed synchronously on every
- *   change. Always solid, but slow on large meshes / observer-mode rotation.
+ * - 'hollow': surface meshes with GPU clipping planes; both sides of the shell
+ *   are visible at the cut (two-sided). Fastest open look.
+ * - 'hybrid' (default): GPU clipping planes + backface culling. Cuts stay open
+ *   so interior anatomy/volume remain visible; exteriors look solid. No CPU
+ *   "capped" lids (those looked like flat colored stickers on multi-label segs).
+ * - 'solid': same cut path as hybrid (GPU planes + culling). Kept as a UI alias
+ *   for users who want a "solid exterior" label; use 'volumetric' for filled cuts.
  * - 'volumetric': the labelmap volume is GPU ray-cast instead of surface
  *   meshes. Filled by nature, cuts are free (shader clipping planes), but the
  *   look is voxelized and per-frame rendering cost is higher.
@@ -48,9 +44,8 @@ export function getSegmentCutRenderMode(viewport: Types.IVolumeViewport): Segmen
 
 /**
  * Whether segment surfaces should render with backface culling (hides the
- * inner wall of the shell so semi-transparent segments look solid). Applies to
- * both capped modes; 'hollow' keeps the legacy two-sided look. Irrelevant in
- * 'volumetric' (surfaces are hidden there), where it stays enabled.
+ * inner wall of the shell so semi-transparent segments look solid). 'hollow'
+ * keeps the two-sided look. Irrelevant in 'volumetric' (surfaces are hidden).
  */
 export function isSegmentBackfaceCullingEnabled(viewport: Types.IVolumeViewport): boolean {
   return getSegmentCutRenderMode(viewport) !== 'hollow';
@@ -125,22 +120,15 @@ export function setSegmentCutRenderMode(
 }
 
 /** Surface meshes (segments) are vtkActor; volumes are vtkVolume. */
-function isSurfaceMeshActor(actor: Types.Actor): boolean {
+export function isSurfaceMeshActor(actor: Types.Actor): boolean {
   return typeof (actor as unknown as { isA?: (name: string) => boolean }).isA === 'function'
     ? (actor as unknown as { isA: (name: string) => boolean }).isA('vtkActor')
     : false;
 }
 
-function buildPlanesKey(vtkPlanes: ReturnType<typeof vtkPlane.newInstance>[]): string {
-  return vtkPlanes
-    .map(plane => [...plane.getNormal(), ...plane.getOrigin()].map(v => v.toFixed(4)).join(','))
-    .join(';');
-}
-
 /**
- * Puts the original (unclipped) polydata back on the mapper but keeps the
- * solid-cut cache, so an unchanged capped mesh can be reused without a
- * recompute (e.g. after a camera move with static cut planes).
+ * Puts the original (unclipped) polydata back on the mapper when a leftover
+ * capped mesh is still bound.
  */
 function showOriginalSurfacePolyData(actor): void {
   const state = solidCutStates.get(actor);
@@ -154,71 +142,12 @@ function showOriginalSurfacePolyData(actor): void {
 }
 
 /**
- * Restores the original (unclipped) polydata on a surface actor and drops the
- * solid-cut state.
+ * Restores the original (unclipped) polydata on a surface actor and drops any
+ * leftover capped-mesh state.
  */
 function restoreSurfaceActorPolyData(actor): void {
   showOriginalSurfacePolyData(actor);
   solidCutStates.delete(actor);
-}
-
-/**
- * Clips a segment surface actor with vtkClipClosedSurface so the cut is capped
- * (solid-looking) instead of exposing the hollow inside of the mesh shell. The
- * original polydata is cached on the actor and restored when no cut is active.
- */
-function applyCappedClipToSurfaceActor(
-  actor,
-  vtkPlanes: ReturnType<typeof vtkPlane.newInstance>[]
-): void {
-  const mapper = actor.getMapper?.();
-  if (!mapper?.getInputData) {
-    return;
-  }
-
-  // Mesh actors are clipped by replacing the mapper input, not by mapper
-  // clipping planes (those would leave the shell open at the cut).
-  mapper.removeAllClippingPlanes?.();
-
-  if (!vtkPlanes.length) {
-    restoreSurfaceActorPolyData(actor);
-    return;
-  }
-
-  let state = solidCutStates.get(actor);
-  const currentInput = mapper.getInputData();
-
-  // If the surface data was recomputed by cornerstone since the last clip (the
-  // mapper input is neither our cached original nor our clipped output), treat
-  // the current input as the new original and drop the stale cache.
-  if (
-    !state ||
-    (currentInput !== state.originalPolyData && currentInput !== state.clippedPolyData)
-  ) {
-    state = { originalPolyData: currentInput };
-    solidCutStates.set(actor, state);
-  }
-
-  const planesKey = buildPlanesKey(vtkPlanes);
-  if (state.lastPlanesKey === planesKey && state.clippedPolyData) {
-    // Same planes as the cached capped mesh: reuse it without recomputing.
-    if (currentInput !== state.clippedPolyData) {
-      mapper.setInputData(state.clippedPolyData);
-    }
-    return;
-  }
-
-  const clipper = vtkClipClosedSurface.newInstance({
-    clippingPlanes: vtkPlanes,
-    generateFaces: true,
-    generateOutline: false,
-  });
-  clipper.setInputData(state.originalPolyData);
-  const clipped = clipper.getOutputData();
-
-  state.clippedPolyData = clipped;
-  state.lastPlanesKey = planesKey;
-  mapper.setInputData(clipped);
 }
 
 /**
@@ -373,9 +302,6 @@ function getCutBaseNormal(viewport: Types.IVolumeViewport, mode: VolumeCutMode):
   }
 }
 
-/** How long interaction must pause before the expensive capped clip runs. */
-const CAP_RECOMPUTE_DELAY_MS = 200;
-
 /**
  * Rebuilds the vtkPlane instances for the given cut config (observer planes
  * depend on the current camera). Returns null when actor bounds are unusable.
@@ -402,64 +328,14 @@ function cancelScheduledCappedClip(viewport: Types.IVolumeViewport): void {
 }
 
 /**
- * Runs the expensive capped clip (vtkClipClosedSurface) on all segment surface
- * actors using the currently stored cut config. Called only after interaction
- * pauses; during interaction the surfaces use fast GPU clipping planes.
- *
- * Segments are processed one per macrotask (yielding the main thread between
- * them and rendering progressively), so many/large meshes cause several short
- * hitches instead of one long freeze. A new interaction cancels the chain via
- * cancelScheduledCappedClip.
- */
-function applyCappedClipToSurfaces(viewport: Types.IVolumeViewport): void {
-  const config = (viewport.__cutPlanesConfig as CutPlaneConfig[]) ?? [];
-  const vtkPlanes = computeVtkPlanes(viewport, config);
-  if (!vtkPlanes) {
-    return;
-  }
-
-  const surfaceActors = viewport.getActors().filter(({ actor }) => isSurfaceMeshActor(actor));
-  if (!surfaceActors.length) {
-    return;
-  }
-
-  let index = 0;
-  const processNext = () => {
-    viewport.__capClipTimer = undefined;
-    applyCappedClipToSurfaceActor(surfaceActors[index].actor, vtkPlanes);
-    index++;
-    viewport.render();
-    if (index < surfaceActors.length) {
-      viewport.__capClipTimer = setTimeout(processNext, 0);
-    }
-  };
-  processNext();
-}
-
-/**
- * Debounces the capped clip until the user stops dragging the cut slider /
- * rotating the camera. The CPU mesh clip of every segment is far too slow to
- * run per input event, while GPU clipping planes are free.
- */
-function scheduleCappedClip(viewport: Types.IVolumeViewport): void {
-  cancelScheduledCappedClip(viewport);
-  viewport.__capClipTimer = setTimeout(() => {
-    viewport.__capClipTimer = undefined;
-    applyCappedClipToSurfaces(viewport);
-  }, CAP_RECOMPUTE_DELAY_MS);
-}
-
-/**
  * Rebuilds the clipping planes from a config and applies them to every actor
  * mapper. The observer plane is rebuilt from the live camera, so calling this on
  * camera change keeps the "from observer" cut aligned with the current view.
  *
- * Segment surface handling depends on the viewport's SegmentCutRenderMode:
- * - 'hollow': fast GPU clipping planes only.
- * - 'hybrid': GPU planes now, capped clip deferred until interaction pauses.
- * - 'solid': capped clip computed synchronously right here.
- * - 'volumetric': surface meshes are hidden; labelmap volume actors get the
- *   same GPU clipping planes (filled cuts, no CPU mesh work).
+ * Segment surfaces always use GPU mapper clipping (open cut). Flat "capped"
+ * lids from vtkClipClosedSurface are not used — they looked like colored
+ * stickers and hid interior anatomy on multi-label segmentations. Use
+ * 'volumetric' when a filled cut is desired.
  */
 function renderCutPlanes(viewport: Types.IVolumeViewport, planes: CutPlaneConfig[]): void {
   const vtkPlanes = computeVtkPlanes(viewport, planes);
@@ -467,36 +343,13 @@ function renderCutPlanes(viewport: Types.IVolumeViewport, planes: CutPlaneConfig
     return;
   }
 
-  const mode = getSegmentCutRenderMode(viewport);
-  const planesKey = buildPlanesKey(vtkPlanes);
-  let needsDeferredCappedClip = false;
+  // Any previously capped mesh must be restored so GPU planes clip the real
+  // surface geometry instead of a stale planar lid.
+  cancelScheduledCappedClip(viewport);
 
   viewport.getActors().forEach(({ actor }) => {
     if (isSurfaceMeshActor(actor)) {
-      if (mode === 'solid') {
-        // Always solid: pay the CPU cost immediately (the per-actor cache still
-        // skips recomputes when the planes have not changed).
-        applyCappedClipToSurfaceActor(actor, vtkPlanes);
-        return;
-      }
-
-      if (mode === 'hybrid' && vtkPlanes.length) {
-        const state = solidCutStates.get(actor);
-        const mapper = actor.getMapper?.();
-        if (
-          state?.lastPlanesKey === planesKey &&
-          mapper?.getInputData?.() === state.clippedPolyData
-        ) {
-          // The displayed capped mesh already matches these planes (e.g. camera
-          // rotation with static cuts) - leave it untouched.
-          return;
-        }
-        needsDeferredCappedClip = true;
-      }
-      // Show the original (uncapped) geometry during interaction; a stale
-      // capped mesh would hide regions the new plane position should reveal.
-      // The cache is kept so an unchanged cut can reuse the capped mesh.
-      showOriginalSurfacePolyData(actor);
+      restoreSurfaceActorPolyData(actor);
     }
 
     const mapper = actor.getMapper?.();
@@ -508,12 +361,6 @@ function renderCutPlanes(viewport: Types.IVolumeViewport, planes: CutPlaneConfig
   });
 
   viewport.render();
-
-  if (needsDeferredCappedClip) {
-    scheduleCappedClip(viewport);
-  } else {
-    cancelScheduledCappedClip(viewport);
-  }
 }
 
 /**
@@ -541,8 +388,7 @@ function attachCutCameraTracking(viewport: Types.IVolumeViewport): void {
   if (viewport.__cutCameraHandler) {
     return;
   }
-  // Throttle to one recompute per animation frame: the observer-mode capped
-  // clip (vtkClipClosedSurface) runs on the CPU, and camera-modified events can
+  // Throttle to one recompute per animation frame: camera-modified events can
   // fire much more often than the display refreshes.
   const handler = () => {
     if (viewport.__cutRafId !== undefined) {

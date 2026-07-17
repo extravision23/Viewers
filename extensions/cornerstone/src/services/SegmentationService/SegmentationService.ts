@@ -29,7 +29,16 @@ import {
   getSegmentCutRenderMode,
   isSegmentBackfaceCullingEnabled,
 } from '../../utils/shiftVolumeAndSegmentation';
-import { refreshVolumetricSegmentsIfEnabled } from '../../utils/volumetricSegmentDisplay';
+import {
+  applyLightingToSurfaceSegmentActors,
+  DEFAULT_SURFACE_SEGMENT_LIGHTING,
+  getAnatomyVolumeLighting,
+  refreshVolumetricSegmentsIfEnabled,
+} from '../../utils/volumetricSegmentDisplay';
+import {
+  applySurfaceMaterialShaders,
+  areSurfaceMaterialShadersEnabled,
+} from '../../utils/surfaceSegmentMaterials';
 import { ViewReference } from '@cornerstonejs/core/types';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
@@ -2438,6 +2447,31 @@ class SegmentationService extends PubSubService {
         modified = true;
       }
     });
+
+    // Per-structure materials (brain/bone/vessel GLSL) when enabled; otherwise
+    // generic glossy Phong. Applied every surface render so new PolySeg meshes
+    // pick it up without forcing an extra render loop.
+    if (!isVolumetricMode) {
+      if (areSurfaceMaterialShadersEnabled()) {
+        applySurfaceMaterialShaders(csViewport as csTypes.IVolumeViewport);
+      } else {
+        const anatomyLighting = getAnatomyVolumeLighting(csViewport as csTypes.IVolumeViewport);
+        applyLightingToSurfaceSegmentActors(csViewport as csTypes.IVolumeViewport, {
+          ...DEFAULT_SURFACE_SEGMENT_LIGHTING,
+          shade: anatomyLighting.shade ?? DEFAULT_SURFACE_SEGMENT_LIGHTING.shade,
+          ambient: anatomyLighting.ambient ?? DEFAULT_SURFACE_SEGMENT_LIGHTING.ambient,
+          diffuse: anatomyLighting.diffuse ?? DEFAULT_SURFACE_SEGMENT_LIGHTING.diffuse,
+          specular: Math.max(
+            anatomyLighting.specular ?? 0,
+            DEFAULT_SURFACE_SEGMENT_LIGHTING.specular
+          ),
+          specularPower: Math.max(
+            anatomyLighting.specularPower ?? 0,
+            DEFAULT_SURFACE_SEGMENT_LIGHTING.specularPower
+          ),
+        });
+      }
+    }
 
     if (modified) {
       csViewport.render();
