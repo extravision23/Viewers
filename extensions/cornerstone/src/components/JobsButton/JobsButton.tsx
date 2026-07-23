@@ -18,6 +18,8 @@ interface Operation {
   stage?: number | null;
   stage_count?: number | null;
   stage_label?: string | null;
+  result_url?: string | null;
+  result_path?: string | null;
 }
 
 function StageBar({
@@ -102,6 +104,16 @@ function OperationRow({ operation }: { operation: Operation }) {
             stageCount={operation.stage_count}
             stageLabel={operation.stage_label}
           />
+        ) : null}
+        {status === 'Completed' && operation.result_url ? (
+          <a
+            href={operation.result_url}
+            className="mt-1 inline-block text-xs text-blue-400 underline hover:text-white"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Download result
+          </a>
         ) : null}
       </div>
       <div className={`shrink-0 text-xs font-semibold ${color}`}>{label}</div>

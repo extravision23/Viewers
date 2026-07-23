@@ -455,14 +455,6 @@ const commandsModule = ({
     sendToGlasses: async ({ segmentationId, dataSource }) => {
       const { uiNotificationService } = servicesManager.services as AppTypes.Services;
 
-      // Show loading notification and track its ID
-      const loadingNotificationId = uiNotificationService.show({
-        title: 'Processing',
-        message: 'Converting segmentation to OBJ format...',
-        type: 'info',
-        duration: 0, // Don't auto-dismiss
-      });
-
       try {
         const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
         if (!segmentationInOHIF) {
@@ -482,8 +474,8 @@ const commandsModule = ({
 
         const formData = new FormData();
         formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
+        formData.append('mode', 'glasses');
 
-        // Get visible segment numbers and add to formData
         const selectedSegmentNumbers = getVisibleSegmentNumbers(
           segmentationId,
           segmentationService,
@@ -496,7 +488,7 @@ const commandsModule = ({
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
         const config = defaultDataSource.getConfig();
 
-        const response = await fetch(buildFunctionUrl(config, 'ConvertDicomToObj'), {
+        const response = await fetch(buildFunctionUrl(config, 'EnqueueConvertExport'), {
           method: 'POST',
           body: formData,
           headers: {
@@ -504,49 +496,26 @@ const commandsModule = ({
           },
         });
 
-        // Dismiss loading notification
-        if (loadingNotificationId) {
-          uiNotificationService.hide(loadingNotificationId);
+        if (response.status === 409) {
+          throw new Error('An export to glasses is already in progress for this series.');
         }
 
-        if (response.ok) {
-          const result = await response.text();
-          console.log('Segmentation sent successfully!', result);
-
-          // Refresh display sets to show any updates
-          const displaySet = displaySetService.getDisplaySetByUID(segmentationId);
-          if (displaySet?.StudyInstanceUID) {
-            try {
-              await defaultDataSource.retrieve.series.metadata({
-                StudyInstanceUID: displaySet.StudyInstanceUID,
-              });
-            } catch (refreshError) {
-              console.warn('Failed to refresh display sets:', refreshError);
-            }
-          }
-
-          // Show success notification
-          uiNotificationService.show({
-            title: 'Success',
-            message: 'Segmentation converted and sent successfully',
-            type: 'success',
-            duration: 3000,
-          });
-        } else {
+        if (!response.ok) {
           const errorText = await response.text().catch(() => response.statusText);
           throw new Error(`Server error: ${response.status} ${errorText}`);
         }
-      } catch (error) {
-        console.error('Error in sendToGlasses:', error);
-
-        // Dismiss loading notification if still showing
-        if (loadingNotificationId) {
-          uiNotificationService.hide(loadingNotificationId);
-        }
 
         uiNotificationService.show({
-          title: 'Conversion Failed',
-          message: error.message || 'Failed to convert segmentation to OBJ format',
+          title: 'Export queued',
+          message: 'Export to smart glasses task is enqueued. Track progress in Operations.',
+          type: 'success',
+          duration: 4000,
+        });
+      } catch (error) {
+        console.error('Error in sendToGlasses:', error);
+        uiNotificationService.show({
+          title: 'Export Failed',
+          message: error.message || 'Failed to enqueue export to smart glasses',
           type: 'error',
           duration: 5000,
         });
@@ -555,16 +524,14 @@ const commandsModule = ({
     downloadObj: async ({ segmentationId, dataSource }) => {
       const { uiNotificationService } = servicesManager.services as AppTypes.Services;
 
-      // Show loading notification and track its ID
       const loadingNotificationId = uiNotificationService.show({
         title: 'Processing',
-        message: 'Converting segmentation to OBJ format...',
+        message: 'OBJ download task is running…',
         type: 'info',
-        duration: 0, // Don't auto-dismiss
+        duration: 0,
       });
 
       try {
-        // Отримання даних сегментації та генерація DICOM Blob
         const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
         if (!segmentationInOHIF) {
           throw new Error('Segmentation not found');
@@ -579,11 +546,10 @@ const commandsModule = ({
         const dataset = generatedSegmentation.dataset;
         const dicomBlob = dcmjs.data.datasetToBlob(dataset);
 
-        // Формуємо FormData з DICOM файлом
         const formData = new FormData();
         formData.append('file', dicomBlob, `${segmentationInOHIF.label}.dcm`);
+        formData.append('mode', 'download');
 
-        // Get visible segment numbers and add to formData
         const selectedSegmentNumbers = getVisibleSegmentNumbers(
           segmentationId,
           segmentationService,
@@ -595,59 +561,112 @@ const commandsModule = ({
 
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
         const config = defaultDataSource.getConfig();
+        const authHeaders = getAuthHeader(defaultDataSource);
 
-        const response = await fetch(buildFunctionUrl(config, 'ConvertDicomToObjDownload'), {
+        const enqueueResponse = await fetch(buildFunctionUrl(config, 'EnqueueConvertExport'), {
           method: 'POST',
           body: formData,
           headers: {
-            ...getAuthHeader(defaultDataSource),
+            ...authHeaders,
           },
         });
 
-        // Dismiss loading notification
+        if (enqueueResponse.status === 409) {
+          throw new Error('An OBJ download is already in progress for this series.');
+        }
+
+        if (!enqueueResponse.ok) {
+          const errorText = await enqueueResponse.text().catch(() => enqueueResponse.statusText);
+          throw new Error(`Server error: ${enqueueResponse.status} ${errorText}`);
+        }
+
+        const enqueueResult = await enqueueResponse.json();
+        const operationId = enqueueResult.operationId;
+        const operationName = enqueueResult.operationName || 'DownloadObj';
+
+        uiNotificationService.show({
+          title: 'Download queued',
+          message: 'OBJ download task is enqueued. Waiting for completion…',
+          type: 'info',
+          duration: 3000,
+        });
+
+        const statusUrl = buildFunctionUrl(config, 'GetOperationStatus');
+        const pollIntervalMs = 3000;
+        const maxPollMs = 30 * 60 * 1000;
+        const startedAt = Date.now();
+        let finalStatus = null;
+        let resultUrl = enqueueResult.result_url || null;
+
+        while (Date.now() - startedAt < maxPollMs) {
+          await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+          const statusResponse = await fetch(
+            `${statusUrl}?operation_id=${encodeURIComponent(operationId)}&operation_name=${encodeURIComponent(operationName)}`,
+            { headers: { ...authHeaders } }
+          );
+          if (!statusResponse.ok) {
+            continue;
+          }
+          const statusPayload = await statusResponse.json();
+          finalStatus = statusPayload.status;
+          if (statusPayload.result_url) {
+            resultUrl = statusPayload.result_url;
+          }
+          if (finalStatus === 'Completed' || finalStatus === 'Failed') {
+            break;
+          }
+        }
+
         if (loadingNotificationId) {
           uiNotificationService.hide(loadingNotificationId);
         }
 
-        if (response.ok) {
-          // Отримуємо відповіді як blob і створюємо посилання для завантаження
-          const blob = await response.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `${segmentationInOHIF.label}.zip`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          window.URL.revokeObjectURL(url);
-
-          // Refresh display sets to show any updates
-          const displaySet = displaySetService.getDisplaySetByUID(segmentationId);
-          if (displaySet?.StudyInstanceUID) {
-            try {
-              await defaultDataSource.retrieve.series.metadata({
-                StudyInstanceUID: displaySet.StudyInstanceUID,
-              });
-            } catch (refreshError) {
-              console.warn('Failed to refresh display sets:', refreshError);
-            }
-          }
-
-          // Show success notification
-          uiNotificationService.show({
-            title: 'Success',
-            message: 'OBJ file downloaded successfully',
-            type: 'success',
-            duration: 3000,
-          });
-        } else {
-          const errorText = await response.text().catch(() => response.statusText);
-          throw new Error(`Server error: ${response.status} ${errorText}`);
+        if (finalStatus !== 'Completed') {
+          throw new Error(
+            finalStatus === 'Failed'
+              ? 'OBJ conversion failed. See Operations for details.'
+              : 'Timed out waiting for OBJ conversion.'
+          );
         }
+
+        if (!resultUrl) {
+          const resultResponse = await fetch(
+            `${buildFunctionUrl(config, 'GetOperationResult')}?operation_id=${encodeURIComponent(operationId)}&operation_name=${encodeURIComponent(operationName)}&format=json`,
+            { headers: { ...authHeaders } }
+          );
+          if (resultResponse.ok) {
+            const resultPayload = await resultResponse.json();
+            resultUrl = resultPayload.result_url;
+          }
+        }
+
+        if (!resultUrl) {
+          throw new Error('Conversion completed but no download URL was returned.');
+        }
+
+        const zipResponse = await fetch(resultUrl);
+        if (!zipResponse.ok) {
+          throw new Error(`Failed to download ZIP (${zipResponse.status})`);
+        }
+        const blob = await zipResponse.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${segmentationInOHIF.label}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+
+        uiNotificationService.show({
+          title: 'Success',
+          message: 'OBJ file downloaded successfully',
+          type: 'success',
+          duration: 3000,
+        });
       } catch (error) {
         console.error('Error in downloadObj:', error);
 
-        // Dismiss loading notification if still showing
         if (loadingNotificationId) {
           uiNotificationService.hide(loadingNotificationId);
         }
