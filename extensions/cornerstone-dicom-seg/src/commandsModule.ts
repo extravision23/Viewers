@@ -488,13 +488,24 @@ const commandsModule = ({
         const defaultDataSource = dataSource ?? extensionManager.getActiveDataSource()[0];
         const config = defaultDataSource.getConfig();
 
-        const response = await fetch(buildFunctionUrl(config, 'EnqueueConvertExport'), {
-          method: 'POST',
-          body: formData,
-          headers: {
-            ...getAuthHeader(defaultDataSource),
-          },
-        });
+        const enqueueOnce = async (force: boolean) => {
+          if (force) {
+            formData.set('force', 'true');
+          }
+          return fetch(buildFunctionUrl(config, 'EnqueueConvertExport'), {
+            method: 'POST',
+            body: formData,
+            headers: {
+              ...getAuthHeader(defaultDataSource),
+            },
+          });
+        };
+
+        let response = await enqueueOnce(false);
+        if (response.status === 409) {
+          // Stuck InQueue lock from a previous failed worker — clear and retry once.
+          response = await enqueueOnce(true);
+        }
 
         if (response.status === 409) {
           throw new Error('An export to glasses is already in progress for this series.');
@@ -563,13 +574,23 @@ const commandsModule = ({
         const config = defaultDataSource.getConfig();
         const authHeaders = getAuthHeader(defaultDataSource);
 
-        const enqueueResponse = await fetch(buildFunctionUrl(config, 'EnqueueConvertExport'), {
-          method: 'POST',
-          body: formData,
-          headers: {
-            ...authHeaders,
-          },
-        });
+        const enqueueOnce = async (force: boolean) => {
+          if (force) {
+            formData.set('force', 'true');
+          }
+          return fetch(buildFunctionUrl(config, 'EnqueueConvertExport'), {
+            method: 'POST',
+            body: formData,
+            headers: {
+              ...authHeaders,
+            },
+          });
+        };
+
+        let enqueueResponse = await enqueueOnce(false);
+        if (enqueueResponse.status === 409) {
+          enqueueResponse = await enqueueOnce(true);
+        }
 
         if (enqueueResponse.status === 409) {
           throw new Error('An OBJ download is already in progress for this series.');
