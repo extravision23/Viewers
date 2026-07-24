@@ -7,6 +7,8 @@ const PAGE_SIZE = 5;
 // While the popover is open, re-fetch to keep in-progress stage bars live.
 const POLL_INTERVAL_MS = 5000;
 
+const CONVERT_OPERATION_NAMES = new Set(['ExportToGlasses', 'DownloadObj']);
+
 interface Operation {
   operation_id: string;
   operation_name: string;
@@ -64,7 +66,19 @@ const STATUS_COLOR: Record<string, string> = {
   Failed: 'text-red-400',
 };
 
-function OperationRow({ operation }: { operation: Operation }) {
+function isCancellable(operation: Operation): boolean {
+  return operation.status === 'InQueue' || operation.status === 'InProgress';
+}
+
+function OperationRow({
+  operation,
+  onCancel,
+  cancelling,
+}: {
+  operation: Operation;
+  onCancel?: (operation: Operation) => void;
+  cancelling?: boolean;
+}) {
   const status = operation.status ?? 'Unknown';
   const label = STATUS_LABEL[status] ?? status;
   const color = STATUS_COLOR[status] ?? 'text-white/50';
@@ -73,6 +87,7 @@ function OperationRow({ operation }: { operation: Operation }) {
     : operation.operation_name;
 
   const studyUrl = `${window.location.origin}/segmentation?StudyInstanceUIDs=${operation.study_id}`;
+  const canCancel = Boolean(onCancel) && isCancellable(operation);
 
   return (
     <div className="flex items-start gap-2 border-b border-white/10 py-2 last:border-0">
@@ -115,6 +130,16 @@ function OperationRow({ operation }: { operation: Operation }) {
             Download result
           </a>
         ) : null}
+        {canCancel ? (
+          <button
+            type="button"
+            className="mt-1 text-xs text-red-400 underline hover:text-white disabled:opacity-50"
+            disabled={cancelling}
+            onClick={() => onCancel?.(operation)}
+          >
+            {cancelling ? 'Cancelling…' : 'Cancel'}
+          </button>
+        ) : null}
       </div>
       <div className={`shrink-0 text-xs font-semibold ${color}`}>{label}</div>
     </div>
@@ -122,28 +147,50 @@ function OperationRow({ operation }: { operation: Operation }) {
 }
 
 export function JobsButton() {
-  const { extensionManager } = useSystem();
+  const { extensionManager, servicesManager } = useSystem() as {
+    extensionManager: any;
+    servicesManager?: { services?: { uiNotificationService?: any } };
+  };
   const [operations, setOperations] = useState<Operation[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
+
+  const notify = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    servicesManager?.services?.uiNotificationService?.show?.({
+      title: type === 'error' ? 'Operations' : 'Operations',
+      message,
+      type,
+      duration: 4000,
+    });
+  };
+
+  const getAuthAndBase = () => {
+    const [ds] = extensionManager?.getActiveDataSource?.() ?? [];
+    if (!ds) {
+      return null;
+    }
+    const config = ds.getConfig?.() ?? {};
+    const baseUrl = getFunctionsBaseUrl(config);
+    if (!baseUrl) {
+      return null;
+    }
+    const bearer = ds?.retrieve?.customClient?.headers?.Authorization;
+    const headers = bearer ? { Authorization: bearer } : {};
+    return { baseUrl, headers };
+  };
 
   const fetchOperations = async () => {
     try {
       setLoading(true);
-      const [ds] = extensionManager?.getActiveDataSource?.() ?? [];
-      if (!ds) {
-        return;
-      }
-      const config = ds.getConfig?.() ?? {};
-      const baseUrl = getFunctionsBaseUrl(config);
-      if (!baseUrl) {
+      const ctx = getAuthAndBase();
+      if (!ctx) {
         return;
       }
 
-      const bearer = ds?.retrieve?.customClient?.headers?.Authorization;
-      const headers = bearer ? { Authorization: bearer } : {};
-      const response = await fetch(`${baseUrl}/GetOperations`, { headers });
+      const response = await fetch(`${ctx.baseUrl}/GetOperations`, { headers: ctx.headers });
       if (!response.ok) {
         return;
       }
@@ -157,6 +204,83 @@ export function JobsButton() {
       setLoading(false);
     }
   };
+
+  const clearStuckConvertOps = async () => {
+    const ctx = getAuthAndBase();
+    if (!ctx) {
+      return;
+    }
+    try {
+      setClearing(true);
+      const response = await fetch(`${ctx.baseUrl}/CancelStuckOperations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...ctx.headers,
+        },
+        body: JSON.stringify({
+          operationNames: ['ExportToGlasses', 'DownloadObj'],
+          clearConvertQueue: true,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => response.statusText);
+        throw new Error(text || `Status ${response.status}`);
+      }
+      const payload = await response.json().catch(() => ({}));
+      const count = payload.cancelledCount ?? 0;
+      notify(
+        count
+          ? `Cleared ${count} stuck export/download operation(s).`
+          : 'No stuck export/download operations found.',
+        'success'
+      );
+      await fetchOperations();
+    } catch (e: any) {
+      console.error('Failed to clear stuck operations:', e);
+      notify(e?.message || 'Failed to clear stuck operations', 'error');
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const cancelOne = async (operation: Operation) => {
+    const ctx = getAuthAndBase();
+    if (!ctx) {
+      return;
+    }
+    try {
+      setCancellingId(operation.operation_id);
+      const response = await fetch(`${ctx.baseUrl}/CancelStuckOperations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...ctx.headers,
+        },
+        body: JSON.stringify({
+          operationId: operation.operation_id,
+          operationName: operation.operation_name,
+          clearConvertQueue: CONVERT_OPERATION_NAMES.has(operation.operation_name),
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => response.statusText);
+        throw new Error(text || `Status ${response.status}`);
+      }
+      notify(`Cancelled ${operation.operation_name}`, 'success');
+      await fetchOperations();
+    } catch (e: any) {
+      console.error('Failed to cancel operation:', e);
+      notify(e?.message || 'Failed to cancel operation', 'error');
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
+  const stuckConvertCount =
+    operations?.filter(
+      op => CONVERT_OPERATION_NAMES.has(op.operation_name) && isCancellable(op)
+    ).length ?? 0;
 
   const totalPages = Math.ceil((operations?.length ?? 0) / PAGE_SIZE);
   const paginated = operations?.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE) ?? [];
@@ -194,7 +318,7 @@ export function JobsButton() {
         className="w-80 p-0"
       >
         <div className="bg-primary-dark rounded-md p-3">
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2 flex items-center justify-between gap-2">
             <span className="text-sm font-semibold text-white">Operations</span>
             <button
               className="text-muted-foreground text-xs hover:text-white"
@@ -203,6 +327,20 @@ export function JobsButton() {
               {loading ? 'Loading…' : 'Refresh'}
             </button>
           </div>
+
+          {stuckConvertCount > 0 ? (
+            <button
+              type="button"
+              className="mb-3 w-full rounded border border-yellow-500/60 bg-yellow-500/10 px-2 py-1.5 text-xs font-medium text-yellow-300 hover:bg-yellow-500/20 disabled:opacity-50"
+              onClick={clearStuckConvertOps}
+              disabled={clearing}
+              title="Cancel stuck ExportToGlasses / DownloadObj and clear convert-tasks queue"
+            >
+              {clearing
+                ? 'Clearing stuck exports…'
+                : `Clear stuck exports (${stuckConvertCount})`}
+            </button>
+          ) : null}
 
           {loading && operations === null ? (
             <div className="text-muted-foreground py-4 text-center text-sm">Loading…</div>
@@ -215,6 +353,8 @@ export function JobsButton() {
                   <OperationRow
                     key={op.operation_id}
                     operation={op}
+                    onCancel={cancelOne}
+                    cancelling={cancellingId === op.operation_id}
                   />
                 ))}
               </div>
