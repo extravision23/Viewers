@@ -1,7 +1,19 @@
+export interface AgentFormField {
+  key: string;
+  label: string;
+  hint: string;
+}
+
+export interface AgentForm {
+  title: string;
+  fields: AgentFormField[];
+}
+
 export interface AgentResponse {
   reply: string;
   threadId: string;
   done: boolean;
+  form?: AgentForm;
 }
 
 function getAgentBaseUrl(): string {
@@ -37,5 +49,6 @@ export async function sendAgentMessage(params: {
     reply: data.reply ?? '',
     threadId: data.threadId ?? threadId,
     done: Boolean(data.done),
+    form: data.form ?? undefined,
   };
 }
