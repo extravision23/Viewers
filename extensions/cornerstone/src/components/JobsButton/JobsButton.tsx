@@ -205,6 +205,28 @@ export function JobsButton() {
     }
   };
 
+  const failViaUpdateOperation = async (
+    ctx: { baseUrl: string; headers: Record<string, string> },
+    operation: Operation
+  ) => {
+    const response = await fetch(`${ctx.baseUrl}/UpdateOperation`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...ctx.headers,
+      },
+      body: JSON.stringify({
+        operationId: operation.operation_id,
+        partitionKey: operation.operation_name,
+        status: 'Failed',
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => response.statusText);
+      throw new Error(text || `UpdateOperation failed (${response.status})`);
+    }
+  };
+
   const clearStuckConvertOps = async () => {
     const ctx = getAuthAndBase();
     if (!ctx) {
@@ -223,6 +245,26 @@ export function JobsButton() {
           clearConvertQueue: true,
         }),
       });
+
+      // Endpoint not deployed yet on this Function App — fall back to UpdateOperation.
+      if (response.status === 404) {
+        const stuck =
+          operations?.filter(
+            op => CONVERT_OPERATION_NAMES.has(op.operation_name) && isCancellable(op)
+          ) ?? [];
+        for (const op of stuck) {
+          await failViaUpdateOperation(ctx, op);
+        }
+        notify(
+          stuck.length
+            ? `Cleared ${stuck.length} stuck export/download operation(s).`
+            : 'No stuck export/download operations found.',
+          'success'
+        );
+        await fetchOperations();
+        return;
+      }
+
       if (!response.ok) {
         const text = await response.text().catch(() => response.statusText);
         throw new Error(text || `Status ${response.status}`);
@@ -263,6 +305,14 @@ export function JobsButton() {
           clearConvertQueue: CONVERT_OPERATION_NAMES.has(operation.operation_name),
         }),
       });
+
+      if (response.status === 404) {
+        await failViaUpdateOperation(ctx, operation);
+        notify(`Cancelled ${operation.operation_name}`, 'success');
+        await fetchOperations();
+        return;
+      }
+
       if (!response.ok) {
         const text = await response.text().catch(() => response.statusText);
         throw new Error(text || `Status ${response.status}`);
