@@ -12,6 +12,11 @@ backend (the LangGraph ICH agent in `XV_ai_assistant`).
   to analyze.
 - Chat history + thread id are persisted in `localStorage` per study
   (`xv-ai-chat:<StudyInstanceUID>`), so the conversation survives reopens.
+- A 📎 button next to the input lets the clinician attach PDF documents (e.g.
+  a Ukrainian lab-report printout) to a message, the same way Claude/ChatGPT
+  attach files to chat — the agent parses the PDF and folds the extracted
+  values into the conversation. Only the filename is persisted to
+  `localStorage`, never the file bytes.
 
 ## Wiring (already done)
 
@@ -35,7 +40,10 @@ POST {agentBaseUrl}/agent
   "agentType": "ich",
   "studyInstanceUID": "<uid>",
   "threadId": "<stable per study+session>",
-  "message": "<user text>"   // "" or null on the first call → runs the first step
+  "message": "<user text>",   // "" or null on the first call → runs the first step
+  "attachments": [            // optional, PDF-only, e.g. an uploaded lab report
+    { "filename": "labs.pdf", "contentType": "application/pdf", "dataBase64": "<base64>" }
+  ]
 }
 
 200 OK
@@ -45,6 +53,13 @@ POST {agentBaseUrl}/agent
   "done": false
 }
 ```
+
+`attachments` are dropped on the very first call for a thread (the graph
+ignores `message` there too — it starts by asking which series to analyze);
+send them with a later message once the conversation is under way. Each PDF
+is parsed to text server-side and appended to `message` before the graph
+sees it, so no special client-side handling of the reply is needed — the
+agent just "reads" the values like it would a typed-out lab result.
 
 This matches the LangGraph interrupt/resume model used by the agent
 (`graphs/ich_graph.py`): the **first** call (no checkpoint for `threadId`, or an

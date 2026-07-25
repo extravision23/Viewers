@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { sendAgentMessage } from '../api/agentClient';
-import type { AgentForm as AgentFormData } from '../api/agentClient';
+import type { AgentAttachment, AgentForm as AgentFormData } from '../api/agentClient';
 import Markdown from './Markdown';
 
 type Role = 'user' | 'assistant';
@@ -8,10 +8,28 @@ interface ChatMessage {
   role: Role;
   content: string;
   form?: AgentFormData;
+  // Filenames only, for display/history — never the file bytes (kept out of
+  // localStorage, see PersistedState).
+  attachments?: string[];
 }
 interface PersistedState {
   threadId: string;
   messages: ChatMessage[];
+}
+
+const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024; // keep in sync with agent_server.py's cap
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // "data:application/pdf;base64,AAAA..." — we only want the payload.
+      resolve(result.slice(result.indexOf(',') + 1));
+    };
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
 }
 
 const STORAGE_PREFIX = 'xv-ai-chat:';
@@ -124,14 +142,16 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<AgentAttachment[]>([]);
 
   const threadIdRef = useRef<string>('');
   const initStartedRef = useRef<string | null>(null); // study for which init was kicked off
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // One round-trip to the agent; appends the reply (plus its form, if any) and persists.
   const runTurn = useCallback(
-    async (message: string | null, baseMessages: ChatMessage[]) => {
+    async (message: string | null, baseMessages: ChatMessage[], attachments?: AgentAttachment[]) => {
       if (!studyInstanceUID) {
         return;
       }
@@ -142,6 +162,7 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
           studyInstanceUID,
           threadId: threadIdRef.current,
           message,
+          attachments,
         });
         threadIdRef.current = res.threadId;
         const next = [...baseMessages, { role: 'assistant' as Role, content: res.reply, form: res.form }];
@@ -186,14 +207,61 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (!text || loading) {
+    if ((!text && pendingAttachments.length === 0) || loading) {
       return;
     }
-    const next = [...messages, { role: 'user' as Role, content: text }];
+    const next = [
+      ...messages,
+      {
+        role: 'user' as Role,
+        content: text,
+        ...(pendingAttachments.length ? { attachments: pendingAttachments.map(a => a.filename) } : {}),
+      },
+    ];
     setMessages(next);
     setInput('');
-    runTurn(text, next);
-  }, [input, loading, messages, runTurn]);
+    const attachments = pendingAttachments;
+    setPendingAttachments([]);
+    runTurn(text, next, attachments);
+  }, [input, loading, messages, pendingAttachments, runTurn]);
+
+  const handleFilesSelected = useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) {
+        return;
+      }
+      const accepted: AgentAttachment[] = [];
+      const rejections: string[] = [];
+      for (const file of Array.from(files)) {
+        if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+          rejections.push(`${file.name}: only PDF files are supported`);
+          continue;
+        }
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          rejections.push(`${file.name}: too large (max ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB)`);
+          continue;
+        }
+        try {
+          const dataBase64 = await fileToBase64(file);
+          accepted.push({ filename: file.name, contentType: file.type || 'application/pdf', dataBase64 });
+        } catch {
+          rejections.push(`${file.name}: couldn't read file`);
+        }
+      }
+      if (accepted.length) {
+        setPendingAttachments(prev => [...prev, ...accepted]);
+      }
+      setError(rejections.length ? rejections.join('; ') : null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    },
+    []
+  );
+
+  const removePendingAttachment = useCallback((filename: string) => {
+    setPendingAttachments(prev => prev.filter(a => a.filename !== filename));
+  }, []);
 
   // Submission from an interactive form (see AgentFormFields) — same path as
   // typing a reply, just with the composed "Label: value" lines as the text.
@@ -268,6 +336,18 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
                   : 'bg-gray-800 text-gray-100')
               }
             >
+              {m.attachments && m.attachments.length > 0 && (
+                <div className="mb-1 flex flex-wrap gap-1">
+                  {m.attachments.map(name => (
+                    <span
+                      key={name}
+                      className="rounded bg-blue-700/60 px-1.5 py-0.5 text-xs text-blue-100"
+                    >
+                      📎 {name}
+                    </span>
+                  ))}
+                </div>
+              )}
               {m.role === 'user' ? m.content : <Markdown text={m.content} />}
               {m.role === 'assistant' && m.form && i === messages.length - 1 && (
                 <AgentFormFields form={m.form} disabled={loading} onSubmit={handleFormSubmit} />
@@ -283,29 +363,66 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
         {error && <div className="text-sm text-red-400">{error}</div>}
       </div>
 
-      <div className="flex shrink-0 items-end gap-2 border-t border-gray-700 p-2">
-        <textarea
-          className="max-h-32 flex-1 resize-none rounded border border-gray-600 bg-black px-2 py-1 text-sm text-white placeholder:text-gray-500 outline-none focus:border-blue-500"
-          style={{ color: '#fff', caretColor: '#fff' }}
-          rows={1}
-          placeholder="Message the assistant…"
-          value={input}
-          disabled={loading}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-        />
-        <button
-          className="rounded bg-blue-600 px-3 py-1 text-sm text-white hover:bg-blue-500 disabled:opacity-50"
-          disabled={loading || !input.trim()}
-          onClick={handleSend}
-        >
-          Send
-        </button>
+      <div className="flex shrink-0 flex-col gap-1 border-t border-gray-700 p-2">
+        {pendingAttachments.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {pendingAttachments.map(a => (
+              <span
+                key={a.filename}
+                className="flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-200"
+              >
+                📎 {a.filename}
+                <button
+                  className="text-gray-400 hover:text-white"
+                  title="Remove"
+                  onClick={() => removePendingAttachment(a.filename)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf"
+            multiple
+            className="hidden"
+            onChange={e => handleFilesSelected(e.target.files)}
+          />
+          <button
+            className="shrink-0 rounded border border-gray-600 px-2 py-1 text-sm text-gray-300 hover:bg-gray-700 disabled:opacity-50"
+            disabled={loading}
+            title="Attach a lab report (PDF)"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            📎
+          </button>
+          <textarea
+            className="max-h-32 flex-1 resize-none rounded border border-gray-600 bg-black px-2 py-1 text-sm text-white placeholder:text-gray-500 outline-none focus:border-blue-500"
+            style={{ color: '#fff', caretColor: '#fff' }}
+            rows={1}
+            placeholder="Message the assistant…"
+            value={input}
+            disabled={loading}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+          />
+          <button
+            className="rounded bg-blue-600 px-3 py-1 text-sm text-white hover:bg-blue-500 disabled:opacity-50"
+            disabled={loading || (!input.trim() && pendingAttachments.length === 0)}
+            onClick={handleSend}
+          >
+            Send
+          </button>
+        </div>
       </div>
     </div>
   );
