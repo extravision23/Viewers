@@ -16,6 +16,13 @@ export interface AgentResponse {
   form?: AgentForm;
 }
 
+// PDF-only for now (e.g. a lab report) — see agent_server.py's _decode_attachments.
+export interface AgentAttachment {
+  filename: string;
+  contentType: string;
+  dataBase64: string;
+}
+
 function getAgentBaseUrl(): string {
   const cfg = (window as any).config || {};
   return cfg.agentBaseUrl || 'http://localhost:7072';
@@ -25,8 +32,9 @@ export async function sendAgentMessage(params: {
   studyInstanceUID: string;
   threadId: string;
   message: string | null;
+  attachments?: AgentAttachment[];
 }): Promise<AgentResponse> {
-  const { studyInstanceUID, threadId, message } = params;
+  const { studyInstanceUID, threadId, message, attachments } = params;
 
   const resp = await fetch(`${getAgentBaseUrl()}/agent`, {
     method: 'POST',
@@ -36,6 +44,7 @@ export async function sendAgentMessage(params: {
       studyInstanceUID,
       threadId,
       message: message ?? '',
+      ...(attachments && attachments.length ? { attachments } : {}),
     }),
   });
 
