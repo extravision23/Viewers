@@ -23,6 +23,17 @@ export interface AgentAttachment {
   dataBase64: string;
 }
 
+export interface AgentOperation {
+  kind: string;
+  label: string;
+  status: string;
+}
+
+export interface AgentOperationsResponse {
+  operations: AgentOperation[];
+  done: boolean;
+}
+
 function getAgentBaseUrl(): string {
   const cfg = (window as any).config || {};
   return cfg.agentBaseUrl || 'http://localhost:7072';
@@ -59,5 +70,18 @@ export async function sendAgentMessage(params: {
     threadId: data.threadId ?? threadId,
     done: Boolean(data.done),
     form: data.form ?? undefined,
+  };
+}
+
+export async function getAgentOperations(threadId: string): Promise<AgentOperationsResponse> {
+  const resp = await fetch(`${getAgentBaseUrl()}/operations?threadId=${encodeURIComponent(threadId)}`);
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`Operations request failed (${resp.status}): ${text.slice(0, 300)}`);
+  }
+  const data = await resp.json();
+  return {
+    operations: Array.isArray(data.operations) ? data.operations : [],
+    done: Boolean(data.done),
   };
 }
