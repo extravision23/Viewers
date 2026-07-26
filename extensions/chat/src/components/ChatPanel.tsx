@@ -1,7 +1,43 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { sendAgentMessage } from '../api/agentClient';
-import type { AgentAttachment, AgentForm as AgentFormData } from '../api/agentClient';
+import { getAgentOperations, sendAgentMessage } from '../api/agentClient';
+import type { AgentAttachment, AgentForm as AgentFormData, AgentOperation } from '../api/agentClient';
 import Markdown from './Markdown';
+
+const OPERATIONS_POLL_MS = 8000;
+const _ACTIVE_OP_STATUSES = new Set(['InQueue', 'InProgress']);
+
+function OperationsPopup({ operations }: { operations: AgentOperation[] }) {
+  return (
+    <div className="absolute right-2 top-10 z-10 w-64 rounded border border-gray-700 bg-gray-900 p-2 shadow-lg">
+      <div className="mb-1 text-xs font-semibold text-white">Background tasks</div>
+      {operations.length === 0 ? (
+        <div className="text-xs text-gray-400">No active tasks.</div>
+      ) : (
+        <ul className="space-y-1">
+          {operations.map((op, i) => (
+            <li key={`${op.kind}-${i}`} className="flex items-center justify-between gap-2 text-xs">
+              <span className="text-gray-200">{op.label}</span>
+              <span
+                className={
+                  'rounded px-1.5 py-0.5 ' +
+                  (_ACTIVE_OP_STATUSES.has(op.status)
+                    ? 'bg-blue-700/60 text-blue-100'
+                    : op.status === 'Completed'
+                      ? 'bg-green-700/60 text-green-100'
+                      : op.status === 'Failed'
+                        ? 'bg-red-700/60 text-red-100'
+                        : 'bg-gray-700 text-gray-200')
+                }
+              >
+                {op.status}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 type Role = 'user' | 'assistant';
 interface ChatMessage {
@@ -11,10 +47,25 @@ interface ChatMessage {
   // Filenames only, for display/history — never the file bytes (kept out of
   // localStorage, see PersistedState).
   attachments?: string[];
+  // Set client-side at creation time — epoch ms.
+  timestamp: number;
 }
 interface PersistedState {
   threadId: string;
   messages: ChatMessage[];
+}
+
+const _KYIV_TIME_FORMAT = new Intl.DateTimeFormat('uk-UA', {
+  timeZone: 'Europe/Kyiv',
+  day: '2-digit',
+  month: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+function formatKyivTime(timestamp: number): string {
+  // uk-UA gives "25.07, 14:32" — drop the comma for a tighter chat timestamp.
+  return _KYIV_TIME_FORMAT.format(new Date(timestamp)).replace(',', '');
 }
 
 const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024; // keep in sync with agent_server.py's cap
@@ -108,10 +159,14 @@ function AgentFormFields({
       {form.fields.map(f => (
         <div key={f.key} className="flex flex-col gap-0.5">
           <label className="text-xs text-gray-300">{f.label}</label>
+          {/* Shown as persistent text, not just a placeholder — a placeholder
+              vanishes once the field has a value/focus, hiding a computed
+              result (e.g. "Computed from imaging: SUPRATENTORIAL") right when
+              the doctor needs it to decide what to type. */}
+          {f.hint && <div className="text-[11px] text-blue-300">{f.hint}</div>}
           <input
             className="rounded border border-gray-600 bg-black px-2 py-1 text-xs text-white placeholder:text-gray-500 outline-none focus:border-blue-500"
             style={{ color: '#fff', caretColor: '#fff' }}
-            placeholder={f.hint}
             value={values[f.key] || ''}
             disabled={disabled}
             onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
@@ -143,11 +198,43 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<AgentAttachment[]>([]);
+  const [operations, setOperations] = useState<AgentOperation[]>([]);
+  const [opsPopupOpen, setOpsPopupOpen] = useState(false);
 
   const threadIdRef = useRef<string>('');
   const initStartedRef = useRef<string | null>(null); // study for which init was kicked off
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Live status poll for background tasks (segmentation + volume/midline-shift
+  // gather) — independent of the chat turn cycle, so the popup reflects
+  // progress even while the doctor isn't actively messaging.
+  useEffect(() => {
+    if (!studyInstanceUID) {
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      const threadId = threadIdRef.current;
+      if (!threadId) {
+        return;
+      }
+      try {
+        const res = await getAgentOperations(threadId);
+        if (!cancelled) {
+          setOperations(res.operations);
+        }
+      } catch {
+        // Transient poll failure — leave last-known state, try again next tick.
+      }
+    };
+    poll();
+    const interval = setInterval(poll, OPERATIONS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [studyInstanceUID, messages]);
 
   // One round-trip to the agent; appends the reply (plus its form, if any) and persists.
   const runTurn = useCallback(
@@ -165,7 +252,10 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
           attachments,
         });
         threadIdRef.current = res.threadId;
-        const next = [...baseMessages, { role: 'assistant' as Role, content: res.reply, form: res.form }];
+        const next = [
+          ...baseMessages,
+          { role: 'assistant' as Role, content: res.reply, form: res.form, timestamp: Date.now() },
+        ];
         setMessages(next);
         saveState(studyInstanceUID, { threadId: res.threadId, messages: next });
       } catch (e: any) {
@@ -215,6 +305,7 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
       {
         role: 'user' as Role,
         content: text,
+        timestamp: Date.now(),
         ...(pendingAttachments.length ? { attachments: pendingAttachments.map(a => a.filename) } : {}),
       },
     ];
@@ -270,7 +361,7 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
       if (!text || loading) {
         return;
       }
-      const next = [...messages, { role: 'user' as Role, content: text }];
+      const next = [...messages, { role: 'user' as Role, content: text, timestamp: Date.now() }];
       setMessages(next);
       runTurn(text, next);
     },
@@ -303,18 +394,30 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
     );
   }
 
+  const activeOpCount = operations.filter(op => _ACTIVE_OP_STATUSES.has(op.status)).length;
+
   return (
     <div className="flex h-full max-h-full flex-col overflow-hidden bg-black text-gray-100">
-      <div className="flex shrink-0 items-center justify-between border-b border-gray-700 px-3 py-2">
+      <div className="relative flex shrink-0 items-center justify-between border-b border-gray-700 px-3 py-2">
         <span className="text-sm font-semibold text-white">AI Assistant</span>
-        <button
-          className="rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-700 disabled:opacity-50"
-          disabled={loading}
-          onClick={handleReset}
-          title="Start a new conversation for this study"
-        >
-          Reset
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            className="relative rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-700"
+            onClick={() => setOpsPopupOpen(v => !v)}
+            title="Background tasks"
+          >
+            Background tasks{activeOpCount > 0 ? ` (${activeOpCount})` : ''}
+          </button>
+          <button
+            className="rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-700 disabled:opacity-50"
+            disabled={loading}
+            onClick={handleReset}
+            title="Start a new conversation for this study"
+          >
+            Reset
+          </button>
+        </div>
+        {opsPopupOpen && <OperationsPopup operations={operations} />}
       </div>
       <div
         ref={scrollRef}
@@ -351,6 +454,15 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
               {m.role === 'user' ? m.content : <Markdown text={m.content} />}
               {m.role === 'assistant' && m.form && i === messages.length - 1 && (
                 <AgentFormFields form={m.form} disabled={loading} onSubmit={handleFormSubmit} />
+              )}
+              {m.timestamp && (
+                <div
+                  className={
+                    'mt-1 text-[10px] ' + (m.role === 'user' ? 'text-blue-200/70' : 'text-gray-400')
+                  }
+                >
+                  {formatKyivTime(m.timestamp)}
+                </div>
               )}
             </div>
           </div>
