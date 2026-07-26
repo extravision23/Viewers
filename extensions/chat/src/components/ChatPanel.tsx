@@ -59,12 +59,13 @@ const _KYIV_TIME_FORMAT = new Intl.DateTimeFormat('uk-UA', {
   timeZone: 'Europe/Kyiv',
   day: '2-digit',
   month: '2-digit',
+  year: 'numeric',
   hour: '2-digit',
   minute: '2-digit',
 });
 
 function formatKyivTime(timestamp: number): string {
-  // uk-UA gives "25.07, 14:32" — drop the comma for a tighter chat timestamp.
+  // uk-UA gives "25.07.2026, 14:32" — drop the comma for a tighter chat timestamp.
   return _KYIV_TIME_FORMAT.format(new Date(timestamp)).replace(',', '');
 }
 
@@ -163,7 +164,7 @@ function AgentFormFields({
               vanishes once the field has a value/focus, hiding a computed
               result (e.g. "Computed from imaging: SUPRATENTORIAL") right when
               the doctor needs it to decide what to type. */}
-          {f.hint && <div className="text-[11px] text-blue-300">{f.hint}</div>}
+          {f.hint && <div className="text-[11px] text-amber-300">{f.hint}</div>}
           <input
             className="rounded border border-gray-600 bg-black px-2 py-1 text-xs text-white placeholder:text-gray-500 outline-none focus:border-blue-500"
             style={{ color: '#fff', caretColor: '#fff' }}
@@ -206,9 +207,22 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // True while any polled operation is still InQueue/InProgress — used to
+  // detect the "just finished" transition below, and reset whenever a fresh
+  // batch of operations starts (new thread, new turn).
+  const hadActiveOpsRef = useRef(false);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
+
   // Live status poll for background tasks (segmentation + volume/midline-shift
   // gather) — independent of the chat turn cycle, so the popup reflects
-  // progress even while the doctor isn't actively messaging.
+  // progress even while the doctor isn't actively messaging. Also the
+  // trigger for auto-advancing the chat: when everything that was pending
+  // resolves, silently send the same "check status" a doctor would otherwise
+  // have to type — no fake user bubble, just the assistant's next message
+  // appearing on its own once results are ready.
   useEffect(() => {
     if (!studyInstanceUID) {
       return;
@@ -221,9 +235,19 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
       }
       try {
         const res = await getAgentOperations(threadId);
-        if (!cancelled) {
-          setOperations(res.operations);
+        if (cancelled) {
+          return;
         }
+        setOperations(res.operations);
+
+        const stillActive = res.operations.some(op => _ACTIVE_OP_STATUSES.has(op.status));
+        if (hadActiveOpsRef.current && !stillActive && !loadingRef.current) {
+          // "status" hits the deterministic fast-path in the segmentation/
+          // gathering wait (no LLM classification ambiguity on an empty
+          // message) — same trigger as a doctor typing "check now".
+          runTurn('status', messagesRef.current);
+        }
+        hadActiveOpsRef.current = stillActive;
       } catch {
         // Transient poll failure — leave last-known state, try again next tick.
       }
@@ -234,7 +258,7 @@ function ChatPanel({ servicesManager }: { servicesManager?: any }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [studyInstanceUID, messages]);
+  }, [studyInstanceUID, messages, loading]);
 
   // One round-trip to the agent; appends the reply (plus its form, if any) and persists.
   const runTurn = useCallback(
