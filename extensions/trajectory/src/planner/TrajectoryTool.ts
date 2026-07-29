@@ -536,6 +536,23 @@ export class TrajectoryTool {
     });
   }
   
+  private getMouseNdc(event: MouseEvent): THREE.Vector2 {
+    const el = this.renderer?.domElement;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      const w = Math.max(rect.width, 1);
+      const h = Math.max(rect.height, 1);
+      return new THREE.Vector2(
+        ((event.clientX - rect.left) / w) * 2 - 1,
+        -((event.clientY - rect.top) / h) * 2 + 1
+      );
+    }
+    return new THREE.Vector2(
+      (event.clientX / window.innerWidth) * 2 - 1,
+      -(event.clientY / window.innerHeight) * 2 + 1
+    );
+  }
+
   /**
    * Handle mouse move for dragging base point
    */
@@ -545,10 +562,7 @@ export class TrajectoryTool {
     raycaster: THREE.Raycaster
   ): void {
     if (this.isDragging) {
-      const mouse = new THREE.Vector2(
-        (event.clientX / window.innerWidth) * 2 - 1,
-        -(event.clientY / window.innerHeight) * 2 + 1
-      );
+      const mouse = this.getMouseNdc(event);
       
       raycaster.setFromCamera(mouse, camera);
       
@@ -608,10 +622,7 @@ export class TrajectoryTool {
       this.onTrajectoryChanged?.();
     } else {
       // Show ghost marker at hover position on entry surface
-      const mouse = new THREE.Vector2(
-        (event.clientX / window.innerWidth) * 2 - 1,
-        -(event.clientY / window.innerHeight) * 2 + 1
-      );
+      const mouse = this.getMouseNdc(event);
       
       raycaster.setFromCamera(mouse, camera);
       

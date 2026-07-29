@@ -32,6 +32,36 @@ function appendQueryParam(url: string, key: string, value: string): string {
   return `${url}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
 }
 
+const MIN_VALID_GLB_BYTES = 512;
+
+async function probeGlbByteSize(url: string): Promise<number | null> {
+  try {
+    const head = await fetch(url, { method: 'HEAD' });
+    if (head.ok) {
+      const len = head.headers.get('content-length');
+      if (len != null && len !== '') {
+        return Number(len);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+async function assertGlbArtifactsHaveGeometry(
+  artifacts: Array<{ url: string }>
+): Promise<void> {
+  const samples = artifacts.slice(0, Math.min(artifacts.length, 6));
+  const sizes = await Promise.all(samples.map(a => probeGlbByteSize(a.url)));
+  const known = sizes.filter((s): s is number => typeof s === 'number' && Number.isFinite(s));
+  if (known.length && known.every(s => s < MIN_VALID_GLB_BYTES)) {
+    throw new Error(
+      `3D conversion returned empty meshes (${known[0]} bytes). Retry with No Cache.`
+    );
+  }
+}
+
 function getActiveViewportWindowLevel(servicesManager, viewportGridService) {
   const defaults = { center: 40, width: 400 };
   try {
@@ -110,9 +140,11 @@ export default function commandsModule({
           throw new Error('Segmentation not found');
         }
 
-        const generated = await commandsManager.runCommand('generateSegmentation', {
-          segmentationId,
-        });
+        const generated = await commandsManager.runCommand(
+          'generateSegmentation',
+          { segmentationId },
+          'SEGMENTATION'
+        );
         if (!generated?.dataset) {
           throw new Error('Failed to generate segmentation dataset.');
         }
@@ -166,6 +198,20 @@ export default function commandsModule({
         );
         if (!glbArtifacts.length) {
           throw new Error('GLB URL is missing in conversion response.');
+        }
+
+        try {
+          await assertGlbArtifactsHaveGeometry(glbArtifacts);
+        } catch (emptyErr) {
+          if (!noCache) {
+            return actions.openTrajectoryPlanner({
+              segmentationId,
+              dataSource: defaultDataSource,
+              noCache: true,
+              meshQuality,
+            });
+          }
+          throw emptyErr;
         }
 
         const displaySet = servicesManager.services.displaySetService?.getDisplaySetByUID?.(

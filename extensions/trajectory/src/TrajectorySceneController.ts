@@ -182,19 +182,83 @@ export class TrajectorySceneController {
       this.trajectoryTool.setTargetCenter(targetCenter);
       this.trajectoryTool.setEntrySurfaceMeshes(entryMeshes);
       this.trajectoryTool.setObstacleMeshes(this.roleManager.getMeshesByRole('OBSTACLE'));
-      if (entryMeshes.length) {
-        const entryPoint = new THREE.Box3().setFromObject(entryMeshes[0]).getCenter(new THREE.Vector3());
-        const dir = new THREE.Vector3().subVectors(targetCenter, entryPoint).normalize();
-        this.trajectoryTool.setFromCandidate({
-          entryPoint,
-          direction: dir,
-          length: entryPoint.distanceTo(targetCenter) + 20,
-        });
+      // Entry must be on the OUTER surface of ENTRY_SURFACE (raycast from outside),
+      // never the mesh AABB center — that puts the tip inside the skull/scalp volume.
+      const placed = this.placeInitialEntryOnSurface(targetCenter, entryMeshes);
+      if (!placed) {
+        throw new Error(
+          'Could not find an entry point on ENTRY_SURFACE. Check that the entry mesh is a closed outer surface.'
+        );
       }
-      this.trajectoryTool.dirty = true;
       this.validateTrajectory();
     }
     this.emitWorkflow();
+  }
+
+  /**
+   * Raycast from outside the scene toward the target; first hit on ENTRY_SURFACE
+   * is the entry point (same approach as trajectory_tool EntryPointResolver).
+   */
+  private placeInitialEntryOnSurface(
+    targetCenter: THREE.Vector3,
+    entryMeshes: THREE.Mesh[]
+  ): boolean {
+    if (!this.trajectoryTool || !entryMeshes.length) {
+      return false;
+    }
+
+    const sceneBounds = this.meshRoot
+      ? new THREE.Box3().setFromObject(this.meshRoot)
+      : new THREE.Box3().setFromObject(this.scene);
+    const sceneDiagonal = Math.max(sceneBounds.getSize(new THREE.Vector3()).length(), 1);
+    const rayStartDistance = sceneDiagonal * 1.2;
+
+    // Prefer the side of the entry mesh relative to the target (hint only for approach).
+    const entryHint = new THREE.Box3().setFromObject(entryMeshes[0]).getCenter(new THREE.Vector3());
+    const preferredOutward = new THREE.Vector3().subVectors(entryHint, targetCenter);
+    if (preferredOutward.lengthSq() < 1e-6) {
+      preferredOutward.set(0, 0, 1);
+    }
+    preferredOutward.normalize();
+
+    const tryDirections: THREE.Vector3[] = [preferredOutward];
+    // Fibonacci-ish fallbacks if the preferred side misses (thin / open mesh).
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < 24; i++) {
+      const y = 1 - (i / 23) * 2;
+      const r = Math.sqrt(Math.max(0, 1 - y * y));
+      const theta = golden * i;
+      tryDirections.push(new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r).normalize());
+    }
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.far = sceneDiagonal * 3;
+
+    for (const outward of tryDirections) {
+      const rayOrigin = targetCenter.clone().addScaledVector(outward, rayStartDistance);
+      const rayDir = new THREE.Vector3().subVectors(targetCenter, rayOrigin).normalize();
+      raycaster.set(rayOrigin, rayDir);
+      const hits = raycaster.intersectObjects(entryMeshes, false);
+      if (!hits.length) {
+        continue;
+      }
+
+      const entryPoint = hits[0].point.clone();
+      const direction = new THREE.Vector3().subVectors(targetCenter, entryPoint);
+      if (direction.lengthSq() < 1e-6) {
+        continue;
+      }
+      direction.normalize();
+
+      this.trajectoryTool.setFromCandidate({
+        entryPoint,
+        direction,
+        length: entryPoint.distanceTo(targetCenter) + 20,
+      });
+      return true;
+    }
+
+    return false;
   }
 
   async saveManualTrajectory(): Promise<void> {
