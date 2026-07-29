@@ -51,6 +51,13 @@ export default function TrajectoryPlannerDialog({
         if (cancelled) {
           return;
         }
+        if (!segments.length) {
+          setLoadError(
+            'No segment meshes loaded — GLB files appear empty. Close this dialog, enable "No Cache", and open Trajectory Planner again.'
+          );
+          setLoading(false);
+          return;
+        }
         await controller.loadSegments(segments);
         setLoading(false);
       } catch (err) {

@@ -1,6 +1,6 @@
 import dcmjs from 'dcmjs';
 import { Types } from '@ohif/core';
-import { cache, metaData, utilities as csUtils } from '@cornerstonejs/core';
+import { cache, imageLoader, metaData, utilities as csUtils } from '@cornerstonejs/core';
 import { segmentation as cornerstoneToolsSegmentation } from '@cornerstonejs/tools';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
 import { adaptersRT, helpers, adaptersSEG } from '@cornerstonejs/adapters';
@@ -19,6 +19,55 @@ import {
   getActiveSegmentationSeriesForServerCall,
   UserCancelledError,
 } from './utils/getActiveSegmentationSeriesForServerCall';
+
+/** Empty / placeholder GLBs from failed meshing are ~200 bytes. */
+const MIN_VALID_GLB_BYTES = 512;
+
+async function probeGlbByteSize(url: string): Promise<number | null> {
+  try {
+    const head = await fetch(url, { method: 'HEAD' });
+    if (head.ok) {
+      const len = head.headers.get('content-length');
+      if (len != null && len !== '') {
+        return Number(len);
+      }
+    }
+  } catch {
+    // fall through to GET range
+  }
+  try {
+    const res = await fetch(url, { headers: { Range: 'bytes=0-0' } });
+    const cr = res.headers.get('content-range');
+    if (cr) {
+      const total = cr.split('/')[1];
+      if (total && total !== '*') {
+        return Number(total);
+      }
+    }
+    const len = res.headers.get('content-length');
+    return len != null ? Number(len) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function assertGlbArtifactsHaveGeometry(
+  artifacts: Array<{ url: string; label?: string }>
+): Promise<void> {
+  const samples = artifacts.slice(0, Math.min(artifacts.length, 6));
+  const sizes = await Promise.all(samples.map(a => probeGlbByteSize(a.url)));
+  const known = sizes.filter((s): s is number => typeof s === 'number' && Number.isFinite(s));
+  if (!known.length) {
+    return;
+  }
+  const allTiny = known.every(s => s < MIN_VALID_GLB_BYTES);
+  if (allTiny) {
+    throw new Error(
+      `3D conversion returned empty meshes (${known[0]} bytes). ` +
+        'Enable "No Cache" and retry to force regeneration.'
+    );
+  }
+}
 
 const getTargetViewport = ({ viewportId, viewportGridService }) => {
   const { viewports, activeViewportId } = viewportGridService.getState();
@@ -212,44 +261,227 @@ const commandsModule = ({
      *
      * @returns Returns the generated segmentation data.
      */
-    generateSegmentation: ({ segmentationId, options = {} }) => {
+    generateSegmentation: async ({ segmentationId, options = {} }) => {
       const segmentation = cornerstoneToolsSegmentation.state.getSegmentation(segmentationId);
-      const predecessorImageId = options.predecessorImageId ?? segmentation.predecessorImageId;
-
-      const { imageIds } = segmentation.representationData.Labelmap;
-
-      const segImages = imageIds.map(imageId => cache.getImage(imageId));
-      const referencedImages = segImages.map(image => cache.getImage(image.referencedImageId));
-
-      const labelmaps2D = [];
-
-      let z = 0;
-
-      for (const segImage of segImages) {
-        const segmentsOnLabelmap = new Set();
-        const pixelData = segImage.getPixelData();
-        const { rows, columns } = segImage;
-
-        // Use a single pass through the pixel data
-        for (let i = 0; i < pixelData.length; i++) {
-          const segment = pixelData[i];
-          if (segment !== 0) {
-            segmentsOnLabelmap.add(segment);
-          }
-        }
-
-        labelmaps2D[z++] = {
-          segmentsOnLabelmap: Array.from(segmentsOnLabelmap),
-          pixelData,
-          rows,
-          columns,
-        };
+      if (!segmentation) {
+        throw new Error(`Segmentation not found: ${segmentationId}`);
       }
 
-      const allSegmentsOnLabelmap = labelmaps2D.map(labelmap => labelmap.segmentsOnLabelmap);
+      const predecessorImageId = options.predecessorImageId ?? segmentation.predecessorImageId;
+      const labelmapData = segmentation.representationData?.Labelmap;
+      if (!labelmapData) {
+        throw new Error('Segmentation has no Labelmap representation data');
+      }
+
+      let referencedImages: any[] = [];
+      let labelmaps2D: Array<{
+        segmentsOnLabelmap: number[];
+        pixelData: any;
+        rows: number;
+        columns: number;
+      }> = [];
+
+      // Volume labelmaps (MPR): stack-derived image pixel buffers are often stale/empty.
+      // Always read labels from the volume scalar data (source of truth).
+      let usedVolumeExport = false;
+      if (labelmapData.volumeId) {
+        const labelmapVolume = cache.getVolume(labelmapData.volumeId);
+        if (!labelmapVolume) {
+          throw new Error(`Labelmap volume not in cache: ${labelmapData.volumeId}`);
+        }
+
+        const refVolume =
+          cornerstoneToolsSegmentation.utilities?.getReferenceVolumeForSegmentationVolume?.(
+            labelmapData.volumeId
+          ) ||
+          (labelmapVolume.referencedVolumeId
+            ? cache.getVolume(labelmapVolume.referencedVolumeId)
+            : null);
+
+        // Prefer the longest imageId list. Volume labelmaps often keep a stale
+        // 1-entry referencedImageIds after stack→volume, which produces
+        // unmeshable single-slice SEGs (SDF never crosses 0 → empty GLBs).
+        const derivedFromLabelmapImages = (labelmapVolume.imageIds || [])
+          .map(id => cache.getImage(id)?.referencedImageId)
+          .filter(Boolean) as string[];
+        const imageIdCandidates = [
+          Array.isArray(refVolume?.imageIds) ? refVolume.imageIds : [],
+          Array.isArray(labelmapData.referencedImageIds) ? labelmapData.referencedImageIds : [],
+          derivedFromLabelmapImages,
+        ].filter(ids => ids.length > 0);
+        const referencedImageIds: string[] = imageIdCandidates.length
+          ? imageIdCandidates.reduce((best, cur) => (cur.length > best.length ? cur : best))
+          : [];
+
+        if (!referencedImageIds.length) {
+          throw new Error(
+            'No referenced source imageIds for volume segmentation. Open the source series in MPR and retry.'
+          );
+        }
+
+        const scalarData =
+          labelmapVolume.voxelManager?.getCompleteScalarDataArray?.() ??
+          labelmapVolume.getScalarData?.();
+        if (!scalarData?.length) {
+          throw new Error('Labelmap volume has no scalar data');
+        }
+
+        const dims = labelmapVolume.dimensions;
+        const dimX = dims[0];
+        const dimY = dims[1];
+        const dimZDeclared = dims[2] || 0;
+        const sliceSize = dimX * dimY;
+        const dimZFromScalar = sliceSize > 0 ? Math.floor(scalarData.length / sliceSize) : 0;
+        const dimZ = Math.max(dimZDeclared, dimZFromScalar, 1);
+        const nSlices = Math.min(referencedImageIds.length, dimZ);
+
+        console.log(
+          `[SEG export] volume path: labelmapRefs=${labelmapData.referencedImageIds?.length ?? 0} ` +
+            `refVolumeIds=${refVolume?.imageIds?.length ?? 0} chosenRefs=${referencedImageIds.length} ` +
+            `dimZ=${dimZ} (declared=${dimZDeclared} scalar=${dimZFromScalar}) nSlices=${nSlices}`
+        );
+
+        for (let z = 0; z < nSlices; z++) {
+          const imageId = referencedImageIds[z];
+          let refImage = cache.getImage(imageId);
+          if (!refImage) {
+            try {
+              refImage = await imageLoader.loadAndCacheImage(imageId);
+            } catch (err) {
+              console.warn(`[SEG export] failed to load source slice ${z}: ${imageId}`, err);
+              continue;
+            }
+          }
+          if (!refImage) {
+            continue;
+          }
+
+          const offset = z * sliceSize;
+          const sliceView = scalarData.subarray
+            ? scalarData.subarray(offset, offset + sliceSize)
+            : scalarData.slice(offset, offset + sliceSize);
+          // Copy into a standalone buffer — adapters mutate/own pixelData.
+          const pixelData = new Uint16Array(sliceView.length);
+          for (let i = 0; i < sliceView.length; i++) {
+            pixelData[i] = sliceView[i];
+          }
+
+          const segmentsOnLabelmap = new Set<number>();
+          for (let i = 0; i < pixelData.length; i++) {
+            if (pixelData[i] !== 0) {
+              segmentsOnLabelmap.add(pixelData[i]);
+            }
+          }
+
+          referencedImages.push(refImage);
+          labelmaps2D.push({
+            segmentsOnLabelmap: Array.from(segmentsOnLabelmap),
+            pixelData,
+            rows: dimY,
+            columns: dimX,
+          });
+        }
+
+        usedVolumeExport = referencedImages.length >= 2;
+        if (!usedVolumeExport) {
+          console.warn(
+            `[SEG export] volume path only got ${referencedImages.length} slice(s); ` +
+              'falling back to stack imageIds if available'
+          );
+          referencedImages = [];
+          labelmaps2D = [];
+        }
+      }
+
+      if (!usedVolumeExport) {
+        // Stack labelmap path (original), also used as fallback when volume export
+        // collapses to a single unmeshable slice.
+        const imageIds: string[] = labelmapData.imageIds || [];
+        if (!imageIds.length) {
+          if (labelmapData.volumeId) {
+            throw new Error(
+              'SEG export produced fewer than 2 slices from the volume labelmap and no stack imageIds remain. ' +
+                '3D meshing needs a multi-slice segmentation. Open the full CT + SEG series and retry with No Cache.'
+            );
+          }
+          throw new Error(
+            'Segmentation labelmap has no imageIds. Ensure the segmentation is loaded in a viewport.'
+          );
+        }
+
+        const referencedIdFallback: string[] = Array.isArray(labelmapData.referencedImageIds)
+          ? labelmapData.referencedImageIds
+          : [];
+
+        for (let index = 0; index < imageIds.length; index++) {
+          const segImage = cache.getImage(imageIds[index]);
+          if (!segImage) {
+            continue;
+          }
+          const refId = segImage.referencedImageId || referencedIdFallback[index];
+          if (!refId || refId === imageIds[index]) {
+            continue;
+          }
+          let referencedImage = cache.getImage(refId);
+          if (!referencedImage) {
+            try {
+              referencedImage = await imageLoader.loadAndCacheImage(refId);
+            } catch {
+              continue;
+            }
+          }
+          if (!referencedImage) {
+            continue;
+          }
+
+          const pixelData = segImage.getPixelData();
+          const { rows, columns } = segImage;
+          const segmentsOnLabelmap = new Set<number>();
+          for (let i = 0; i < pixelData.length; i++) {
+            if (pixelData[i] !== 0) {
+              segmentsOnLabelmap.add(pixelData[i]);
+            }
+          }
+
+          referencedImages.push(referencedImage);
+          labelmaps2D.push({
+            segmentsOnLabelmap: Array.from(segmentsOnLabelmap),
+            pixelData,
+            rows,
+            columns,
+          });
+        }
+
+        console.log(`[SEG export] stack path: resolvedSlices=${referencedImages.length}`);
+      }
+
+      if (!referencedImages.length || !labelmaps2D.length) {
+        throw new Error(
+          'Could not build SEG slices from labelmap. Open the source series and retry.'
+        );
+      }
+
+      if (referencedImages.length < 2) {
+        throw new Error(
+          `SEG export only has ${referencedImages.length} slice(s). Marching cubes needs ≥2 slices ` +
+            '(single-slice masks yield empty GLBs). Load the full multi-slice CT series with this SEG and retry.'
+        );
+      }
+
+      const nonEmptyLabelCount = labelmaps2D.reduce(
+        (n, lm) => n + (lm.segmentsOnLabelmap.length > 0 ? 1 : 0),
+        0
+      );
+      if (nonEmptyLabelCount === 0) {
+        throw new Error(
+          'Labelmap appears empty (no segment voxels). Cannot export SEG for 3D conversion.'
+        );
+      }
 
       const labelmap3D = {
-        segmentsOnLabelmap: Array.from(new Set(allSegmentsOnLabelmap.flat())),
+        segmentsOnLabelmap: Array.from(
+          new Set(labelmaps2D.map(labelmap => labelmap.segmentsOnLabelmap).flat())
+        ),
         metadata: [],
         labelmaps2D,
       };
@@ -258,25 +490,25 @@ const commandsModule = ({
       const representations = segmentationService.getRepresentationsForSegmentation(segmentationId);
 
       Object.entries(segmentationInOHIF.segments).forEach(([segmentIndex, segment]) => {
-        // segmentation service already has a color for each segment
         if (!segment) {
           return;
         }
 
         const { label } = segment;
-
         const firstRepresentation = representations[0];
-        const color = segmentationService.getSegmentColor(
-          firstRepresentation.viewportId,
-          segmentationId,
-          segment.segmentIndex
-        );
+        const color = firstRepresentation
+          ? segmentationService.getSegmentColor(
+              firstRepresentation.viewportId,
+              segmentationId,
+              segment.segmentIndex
+            )
+          : [255, 0, 0, 255];
 
         const RecommendedDisplayCIELabValue = dcmjs.data.Colors.rgb2DICOMLAB(
           color.slice(0, 3).map(value => value / 255)
         ).map(value => Math.round(value));
 
-        const segmentMetadata = {
+        labelmap3D.metadata[segmentIndex] = {
           SegmentNumber: segmentIndex.toString(),
           SegmentLabel: label,
           SegmentAlgorithmType: segment?.algorithmType || 'MANUAL',
@@ -293,15 +525,12 @@ const commandsModule = ({
             CodeMeaning: 'Tissue',
           },
         };
-        labelmap3D.metadata[segmentIndex] = segmentMetadata;
       });
 
-      const generatedSegmentation = generateSegmentation(referencedImages, labelmap3D, metaData, {
-        predecessorImageId,
+      return generateSegmentation(referencedImages, labelmap3D, metaData, {
+        predecessorImageId: predecessorImageId || referencedImages[0]?.imageId,
         ...options,
       });
-
-      return generatedSegmentation;
     },
     /**
      * Downloads a segmentation based on the provided segmentation ID.
@@ -313,9 +542,9 @@ const commandsModule = ({
      * @param params.segmentationId - ID of the segmentation to be downloaded.
      *
      */
-    downloadSegmentation: ({ segmentationId }) => {
+    downloadSegmentation: async ({ segmentationId }) => {
       const segmentationInOHIF = segmentationService.getSegmentation(segmentationId);
-      const generatedSegmentation = actions.generateSegmentation({
+      const generatedSegmentation = await actions.generateSegmentation({
         segmentationId,
       });
 
@@ -461,7 +690,7 @@ const commandsModule = ({
           throw new Error('Segmentation not found');
         }
 
-        const generatedSegmentation = actions.generateSegmentation({
+        const generatedSegmentation = await actions.generateSegmentation({
           segmentationId,
         });
 
@@ -548,7 +777,7 @@ const commandsModule = ({
           throw new Error('Segmentation not found');
         }
 
-        const generatedSegmentation = actions.generateSegmentation({ segmentationId });
+        const generatedSegmentation = await actions.generateSegmentation({ segmentationId });
 
         if (!generatedSegmentation || !generatedSegmentation.dataset) {
           throw new Error('Failed to generate segmentation dataset.');
@@ -716,7 +945,7 @@ const commandsModule = ({
           throw new Error('Segmentation not found');
         }
 
-        const generatedSegmentation = actions.generateSegmentation({ segmentationId });
+        const generatedSegmentation = await actions.generateSegmentation({ segmentationId });
         if (!generatedSegmentation || !generatedSegmentation.dataset) {
           throw new Error('Failed to generate segmentation dataset.');
         }
@@ -768,11 +997,25 @@ const commandsModule = ({
         }
 
         const payload = await readConvertResponse(response);
-        const glbArtifacts = (payload?.artifacts || []).filter(
+        let glbArtifacts = (payload?.artifacts || []).filter(
           item => String(item.format || '').toLowerCase() === 'glb' && item?.url
         );
         if (!glbArtifacts.length) {
           throw new Error('GLB URL is missing in conversion response.');
+        }
+
+        try {
+          await assertGlbArtifactsHaveGeometry(glbArtifacts);
+        } catch (emptyErr) {
+          if (!noCache) {
+            // Stale empty cache from a prior bad SEG export — force rebuild once.
+            return actions.previewSegmentation3D({
+              segmentationId,
+              dataSource: defaultDataSource,
+              noCache: true,
+            });
+          }
+          throw emptyErr;
         }
 
         uiDialogService.show({
