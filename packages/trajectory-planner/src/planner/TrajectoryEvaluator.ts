@@ -10,17 +10,18 @@
  *
  * Scoring function (higher = better):
  *
- *   Score(T) = α·V_H_norm − β·D_skin_norm − γ·P_norm
+ *   Score(T) = α·V_H_norm − β·D_skin_norm − γ·P_norm − δ·L_norm
  *
  * ── Normalisation strategy ───────────────────────────────────────
  *
- *   V_H_norm    = V_H(T)            / hematomaVoxelCount    ∈ [0, 1]
- *   D_skin_norm = D_skin_to_hema(T) / trajectoryLength      ∈ [0, 1]
- *   P_norm      = 1 − exp(−P_raw)                           ∈ [0, 1)
+ *   V_H_norm    = V_H(T) / hematomaVoxelCount                    ∈ [0, 1]
+ *   D_skin_norm = min(1, D_skin_to_hema(T) / SKIN_REF_MM)        ∈ [0, 1]
+ *   L_norm      = min(1, length(T) / LENGTH_REF_MM)              ∈ [0, 1]
+ *   P_norm      = 1 − exp(−P_raw)                                ∈ [0, 1)
  *
- * By mapping every raw term to [0, 1] *before* applying weights the
- * coefficients become patient- and resolution-independent, which is
- * critical for reproducible calibration across cases.
+ * Path terms use absolute millimetres (capped by clinical reference
+ * distances), not D_skin/length. The fractional form rewarded long
+ * through-lesion needles that only looked short as a ratio.
  *
  * Raw P(T) is:
  *   w_vessel / (d_vessel + ε)
@@ -45,7 +46,11 @@ import type {
   ScoreBreakdown,
   DistanceFieldSet,
 } from '../types';
-import { DEFAULT_COEFFICIENTS } from '../types';
+import {
+  DEFAULT_COEFFICIENTS,
+  SKIN_DISTANCE_REF_MM,
+  TRAJECTORY_LENGTH_REF_MM,
+} from '../types';
 import { gridIndex, gridToWorld } from '../voxel/Voxelizer';
 
 const EPS = 0.01; // mm – avoids division by zero in proximity penalty
@@ -296,22 +301,25 @@ export function scoreTrajectory(
   // ── Normalisation (see module docstring for strategy) ────────────
   const hemaTotal = input.hematomaVoxelCount ?? countSetVoxels(grid);
   const vhNorm = hemaTotal > 0 ? voxelsInHematoma / hemaTotal : 0;
-  const dSkinNorm = candidate.length > 0
-    ? distSkinToHematoma / candidate.length
-    : 1;
+  const dSkinNorm = Math.min(1, distSkinToHematoma / SKIN_DISTANCE_REF_MM);
+  const lengthNorm = Math.min(1, candidate.length / TRAJECTORY_LENGTH_REF_MM);
   const proximityNorm = 1 - Math.exp(-proximityRaw);
+  const delta = coefficients.delta ?? DEFAULT_COEFFICIENTS.delta;
 
   // ── Final score (all terms in [0,1]) ─────────────────────────────
   const score =
     coefficients.alpha * vhNorm -
     coefficients.beta * dSkinNorm -
-    coefficients.gamma * proximityNorm;
+    coefficients.gamma * proximityNorm -
+    delta * lengthNorm;
 
   const scoreBreakdown: ScoreBreakdown = {
     vhRaw: voxelsInHematoma,
     vhNorm,
     dSkinRaw: distSkinToHematoma,
     dSkinNorm,
+    lengthRaw: candidate.length,
+    lengthNorm,
     proximityRaw,
     proximityNorm,
     dVessel,

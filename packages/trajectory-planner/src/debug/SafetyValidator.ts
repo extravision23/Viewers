@@ -107,6 +107,12 @@ function checkScoreBreakdownRanges(
       out.push({ severity: 'warning', code: 'DSKIN_NORM_OUT_OF_RANGE', message: `${tag}: dSkinNorm=${b.dSkinNorm.toFixed(6)} outside [0,1]` });
     }
 
+    if (!Number.isFinite(b.lengthNorm)) {
+      out.push({ severity: 'error', code: 'LENGTH_NORM_NOT_FINITE', message: `${tag}: lengthNorm is not finite (${b.lengthNorm})` });
+    } else if (b.lengthNorm < -1e-9 || b.lengthNorm > 1 + 1e-9) {
+      out.push({ severity: 'warning', code: 'LENGTH_NORM_OUT_OF_RANGE', message: `${tag}: lengthNorm=${b.lengthNorm.toFixed(6)} outside [0,1]` });
+    }
+
     if (!Number.isFinite(b.proximityNorm)) {
       out.push({ severity: 'error', code: 'PROX_NORM_NOT_FINITE', message: `${tag}: proximityNorm is not finite (${b.proximityNorm})` });
     } else if (b.proximityNorm < -1e-9 || b.proximityNorm > 1 + 1e-9) {

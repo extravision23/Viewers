@@ -42,11 +42,22 @@ export async function updateSegmentationStats({
     return null;
   }
 
-  const stats = await cornerstoneTools.utilities.segmentation.getStatistics({
-    segmentationId,
-    segmentIndices,
-    mode: 'individual',
-  });
+  let stats;
+  try {
+    stats = await cornerstoneTools.utilities.segmentation.getStatistics({
+      segmentationId,
+      segmentIndices,
+      mode: 'individual',
+    });
+  } catch (err) {
+    // Cornerstone volume stats can throw when strategyData is null
+    // (labelmap volume not ready yet / stack→volume mid-transition).
+    console.debug(
+      '[updateSegmentationStats] getStatistics failed; will retry on next modify',
+      err
+    );
+    return null;
+  }
 
   if (!stats) {
     return null;

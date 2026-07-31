@@ -1,6 +1,6 @@
 import dcmjs from 'dcmjs';
 import { Types } from '@ohif/core';
-import { cache, imageLoader, metaData, utilities as csUtils } from '@cornerstonejs/core';
+import { cache, metaData, utilities as csUtils } from '@cornerstonejs/core';
 import { segmentation as cornerstoneToolsSegmentation } from '@cornerstonejs/tools';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
 import { adaptersRT, helpers, adaptersSEG } from '@cornerstonejs/adapters';
@@ -91,6 +91,58 @@ const {
 } = adaptersRT;
 
 const { downloadDICOMData } = helpers;
+
+/**
+ * Resolve a referenced CT/MR image for SEG export without network fetches.
+ * Adapters only need `imageId` + `voxelManager.getScalarData()`; metadata comes
+ * from the metaData provider. Reloading every slice via loadAndCacheImage caused
+ * mass XMLHttpRequest failures in the error overlay.
+ */
+function resolveReferencedImageForSegExport(
+  imageId: string,
+  rows: number,
+  columns: number
+): { imageId: string; voxelManager: { getScalarData: () => Uint16Array } } | null {
+  if (!imageId) {
+    return null;
+  }
+
+  const cached: any = cache.getImage(imageId);
+  if (cached) {
+    if (cached.voxelManager?.getScalarData) {
+      return cached;
+    }
+    if (typeof cached.getPixelData === 'function') {
+      return {
+        imageId,
+        voxelManager: {
+          getScalarData: () => {
+            const pd = cached.getPixelData();
+            return pd instanceof Uint16Array ? pd : new Uint16Array(pd);
+          },
+        },
+      };
+    }
+  }
+
+  // Metadata must exist for this imageId (series already opened in viewer).
+  const hasMeta =
+    metaData.get('instance', imageId) ||
+    metaData.get('imagePlaneModule', imageId) ||
+    metaData.get('generalImageModule', imageId) ||
+    metaData.get('seriesModule', imageId);
+  if (!hasMeta) {
+    return null;
+  }
+
+  const sliceSize = Math.max(1, rows * columns);
+  return {
+    imageId,
+    voxelManager: {
+      getScalarData: () => new Uint16Array(sliceSize),
+    },
+  };
+}
 
 function getAuthHeader(dataSource) {
   const bearer = dataSource?.retrieve?.customClient?.headers?.Authorization;
@@ -281,8 +333,9 @@ const commandsModule = ({
         columns: number;
       }> = [];
 
-      // Volume labelmaps (MPR): stack-derived image pixel buffers are often stale/empty.
-      // Always read labels from the volume scalar data (source of truth).
+      // Volume labelmaps (MPR): prefer full source series imageIds and volume scalar data.
+      // Stack-derived image buffers are often stale; always read labels from volume scalars.
+      // A stale 1-entry referencedImageIds list produces unmeshable single-slice SEGs.
       let usedVolumeExport = false;
       if (labelmapData.volumeId) {
         const labelmapVolume = cache.getVolume(labelmapData.volumeId);
@@ -343,16 +396,11 @@ const commandsModule = ({
 
         for (let z = 0; z < nSlices; z++) {
           const imageId = referencedImageIds[z];
-          let refImage = cache.getImage(imageId);
+          // Prefer cache/metadata stubs — do not network-fetch every CT slice
+          // (loadAndCacheImage caused mass XMLHttpRequest overlay errors).
+          const refImage = resolveReferencedImageForSegExport(imageId, dimY, dimX);
           if (!refImage) {
-            try {
-              refImage = await imageLoader.loadAndCacheImage(imageId);
-            } catch (err) {
-              console.warn(`[SEG export] failed to load source slice ${z}: ${imageId}`, err);
-              continue;
-            }
-          }
-          if (!refImage) {
+            console.warn(`[SEG export] no cache/metadata for source slice ${z}: ${imageId}`);
             continue;
           }
 
@@ -422,20 +470,13 @@ const commandsModule = ({
           if (!refId || refId === imageIds[index]) {
             continue;
           }
-          let referencedImage = cache.getImage(refId);
-          if (!referencedImage) {
-            try {
-              referencedImage = await imageLoader.loadAndCacheImage(refId);
-            } catch {
-              continue;
-            }
-          }
+          const { rows, columns } = segImage;
+          const referencedImage = resolveReferencedImageForSegExport(refId, rows, columns);
           if (!referencedImage) {
             continue;
           }
 
           const pixelData = segImage.getPixelData();
-          const { rows, columns } = segImage;
           const segmentsOnLabelmap = new Set<number>();
           for (let i = 0; i < pixelData.length; i++) {
             if (pixelData[i] !== 0) {

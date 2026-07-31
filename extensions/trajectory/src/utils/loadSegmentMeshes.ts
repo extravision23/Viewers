@@ -18,35 +18,77 @@ export type LoadedSegmentMesh = {
   defaultRole: MeshRole;
 };
 
+function formatGlbLoadError(err: unknown, label: string): string {
+  if (err instanceof Error && err.message) {
+    return `${label}: ${err.message}`;
+  }
+  const xhr = err as { status?: number; statusText?: string; responseURL?: string };
+  if (typeof xhr?.status === 'number') {
+    return `${label}: HTTP ${xhr.status} ${xhr.statusText || ''}`.trim();
+  }
+  return `${label}: failed to load GLB`;
+}
+
 export async function loadSegmentMeshes(
   artifacts: SegmentMeshArtifact[]
 ): Promise<{ root: THREE.Group; segments: LoadedSegmentMesh[] }> {
   const loader = new GLTFLoader();
   const root = new THREE.Group();
   const segments: LoadedSegmentMesh[] = [];
+  const loadErrors: string[] = [];
 
-  for (let index = 0; index < artifacts.length; index++) {
-    const artifact = artifacts[index];
-    const segmentNumber =
-      typeof artifact.segmentNumber === 'number' ? artifact.segmentNumber : index + 1;
-    const label = artifact.label || `Segment ${segmentNumber}`;
+  await Promise.all(
+    artifacts.map(
+      (artifact, index) =>
+        new Promise<void>(resolve => {
+          const segmentNumber =
+            typeof artifact.segmentNumber === 'number' ? artifact.segmentNumber : index + 1;
+          const label = artifact.label || `Segment ${segmentNumber}`;
 
-    const gltf = await new Promise<THREE.Group>((resolve, reject) => {
-      loader.load(artifact.url, loaded => resolve(loaded.scene), undefined, reject);
-    });
+          if (!artifact.url) {
+            loadErrors.push(`${label}: missing URL`);
+            resolve();
+            return;
+          }
 
-    const meshes = collectMeshes(gltf);
-    meshes.forEach((mesh, meshIndex) => {
-      mesh.name = label;
-      root.add(mesh);
-      segments.push({
-        id: `seg-${segmentNumber}-${meshIndex}`,
-        segmentNumber,
-        label,
-        mesh,
-        defaultRole: inferMeshRoleFromLabel(label),
-      });
-    });
+          loader.load(
+            artifact.url,
+            gltf => {
+              const meshes = collectMeshes(gltf.scene);
+              meshes.forEach((mesh, meshIndex) => {
+                mesh.name = label;
+                root.add(mesh);
+                segments.push({
+                  id: `seg-${segmentNumber}-${meshIndex}`,
+                  segmentNumber,
+                  label,
+                  mesh,
+                  defaultRole: inferMeshRoleFromLabel(label),
+                });
+              });
+              resolve();
+            },
+            undefined,
+            err => {
+              // Never reject with raw XMLHttpRequest — that floods the error overlay.
+              loadErrors.push(formatGlbLoadError(err, label));
+              resolve();
+            }
+          );
+        })
+    )
+  );
+
+  if (!segments.length) {
+    throw new Error(
+      loadErrors.length
+        ? `No segment meshes loaded. ${loadErrors.slice(0, 5).join('; ')}`
+        : 'No segment meshes loaded.'
+    );
+  }
+
+  if (loadErrors.length) {
+    console.warn('[loadSegmentMeshes] some GLBs failed:', loadErrors);
   }
 
   buildBVH(segments.map(s => s.mesh));

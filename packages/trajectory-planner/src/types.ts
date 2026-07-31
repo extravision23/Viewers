@@ -117,21 +117,25 @@ export interface ScoredTrajectory extends TrajectoryCandidate {
  *
  * Normalisation strategy (documented here, implemented in evaluator):
  *
- *   V_H_norm       = V_H / hematomaVoxelCount          ∈ [0, 1]
- *   D_skin_norm    = D_skin_to_hema / trajectoryLength  ∈ [0, 1]
- *   P_norm         = 1 − exp(−P_raw)                   ∈ [0, 1)
+ *   V_H_norm       = V_H / hematomaVoxelCount                 ∈ [0, 1]
+ *   D_skin_norm    = min(1, D_skin_to_hema / SKIN_REF_MM)     ∈ [0, 1]
+ *   L_norm         = min(1, trajectoryLength / LENGTH_REF_MM) ∈ [0, 1]
+ *   P_norm         = 1 − exp(−P_raw)                          ∈ [0, 1)
  *
  * The final score is:
- *   score = α·V_H_norm − β·D_skin_norm − γ·P_norm
+ *   score = α·V_H_norm − β·D_skin_norm − γ·P_norm − δ·L_norm
  *
- * This keeps every coefficient operating on [0,1]-range quantities,
- * making them directly comparable across patients and resolutions.
+ * Absolute (mm) normalisation for path terms — not D_skin/length —
+ * so short extracerebral approaches are preferred over long through-
+ * lesion detours that only look "efficient" as a fraction.
  */
 export interface ScoreBreakdown {
   vhRaw: number;
   vhNorm: number;
   dSkinRaw: number;
   dSkinNorm: number;
+  lengthRaw: number;
+  lengthNorm: number;
   proximityRaw: number;
   proximityNorm: number;
   dVessel: number;
@@ -139,22 +143,28 @@ export interface ScoreBreakdown {
   dSinus: number;
 }
 
+/** Reference distances (mm) used to map path lengths into [0, 1]. */
+export const SKIN_DISTANCE_REF_MM = 100;
+export const TRAJECTORY_LENGTH_REF_MM = 150;
+
 /** Weights for the scoring function. */
 export interface ScoringCoefficients {
   alpha: number;   // weight for hematoma coverage
-  beta: number;    // weight for skin-to-hematoma distance
+  beta: number;    // weight for absolute skin-to-hematoma distance
   gamma: number;   // weight for proximity penalty
+  delta: number;   // weight for absolute trajectory length
 
   wVessel: number; // proximity sub-weight: vessels
   wVent: number;   // proximity sub-weight: ventricles
   wSinus: number;  // proximity sub-weight: sinuses
 }
 
-/** Default scoring coefficients (calibration starting point). */
+/** Default scoring coefficients — length-aware starting point. */
 export const DEFAULT_COEFFICIENTS: ScoringCoefficients = {
-  alpha: 1.0,
-  beta: 0.3,
+  alpha: 0.8,
+  beta: 1.2,
   gamma: 0.5,
+  delta: 0.7,
   wVessel: 1.0,
   wVent: 0.8,
   wSinus: 0.6,
@@ -201,8 +211,9 @@ export interface GeneratorConfig {
 }
 
 export const DEFAULT_GENERATOR_CONFIG: GeneratorConfig = {
-  coneHalfAngleDeg: 20,
-  samplesPerCone: 300,
+  // Wider than the old 20° PCA cone so shorter scalp entries off-axis are considered.
+  coneHalfAngleDeg: 35,
+  samplesPerCone: 400,
 };
 
 /** Configuration for the full optimizer pipeline. */

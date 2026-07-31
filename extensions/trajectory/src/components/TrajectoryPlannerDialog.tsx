@@ -62,7 +62,13 @@ export default function TrajectoryPlannerDialog({
         setLoading(false);
       } catch (err) {
         if (!cancelled) {
-          setLoadError(err?.message || 'Failed to load segment meshes');
+          const message =
+            err instanceof Error
+              ? err.message
+              : typeof (err as { status?: number })?.status === 'number'
+                ? `HTTP ${(err as { status: number }).status}`
+                : 'Failed to load segment meshes';
+          setLoadError(message);
           setLoading(false);
         }
       }
