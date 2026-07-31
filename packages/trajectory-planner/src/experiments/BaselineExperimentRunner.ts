@@ -94,7 +94,7 @@ function buildAggregateCsv(
   lines.push(`# tag=${meta.tag}`);
   lines.push(`# timestamp=${meta.timestamp}`);
   const cfg = meta.config;
-  lines.push(`# alpha=${cfg.alpha} beta=${cfg.beta} gamma=${cfg.gamma} wVessel=${cfg.wVessel} wVent=${cfg.wVent} wSinus=${cfg.wSinus}`);
+  lines.push(`# alpha=${cfg.alpha} beta=${cfg.beta} gamma=${cfg.gamma} delta=${(cfg as { delta?: number }).delta ?? ''} wVessel=${cfg.wVessel} wVent=${cfg.wVent} wSinus=${cfg.wSinus}`);
   lines.push(`# dilationMm=${cfg.dilationRadiusMm} cone=${cfg.coneHalfAngleDeg}deg samples=${cfg.samplesPerCone} topK=${cfg.topK} spacing=${cfg.spacingMm}mm`);
 
   lines.push(CSV_HEADERS.join(','));

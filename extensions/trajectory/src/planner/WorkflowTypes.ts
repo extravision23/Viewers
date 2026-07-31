@@ -55,6 +55,7 @@ export interface AdvancedConfig {
   alpha: number;
   beta: number;
   gamma: number;
+  delta: number;
   wVessel: number;
   wVent: number;
   wSinus: number;
@@ -74,29 +75,30 @@ export type PlannerQuality = 'preview' | 'accurate';
 export const QUALITY_PRESETS: Record<PlannerQuality, Partial<AdvancedConfig>> = {
   preview: {
     spacing: 2.0,
-    samplesPerCone: 80,
-    topK: 3,
+    samplesPerCone: 120,
+    topK: 5,
     dilationRadiusMm: 0,
   },
   accurate: {
     spacing: 1.0,
-    samplesPerCone: 400,
+    samplesPerCone: 500,
     topK: 10,
     dilationRadiusMm: 0,
   },
 };
 
 export const DEFAULT_ADVANCED_CONFIG: AdvancedConfig = {
-  alpha: 1.0,
-  beta: 0.3,
+  alpha: 0.8,
+  beta: 1.2,
   gamma: 0.5,
+  delta: 0.7,
   wVessel: 1.0,
   wVent: 0.8,
   wSinus: 0.6,
   spacing: 2.0,
-  coneHalfAngleDeg: 20,
-  samplesPerCone: 80,
-  topK: 3,
+  coneHalfAngleDeg: 35,
+  samplesPerCone: 120,
+  topK: 5,
   dilationRadiusMm: 0,
 };
 

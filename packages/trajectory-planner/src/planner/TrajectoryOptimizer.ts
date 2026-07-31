@@ -120,13 +120,25 @@ export function optimizeTrajectories(input: OptimizeInput): OptimizationResult {
   const pca = analyzePCA(masks.hematomaMask);
   const tPCA = performance.now();
 
+  // Widen the search cone when the hematoma is roughly spherical —
+  // principal axis is then arbitrary and a narrow cone misses short entries.
+  const generatorCfg = { ...generator };
+  if (!pca.anisotropy.isStable) {
+    generatorCfg.coneHalfAngleDeg = Math.max(generatorCfg.coneHalfAngleDeg, 55);
+    generatorCfg.samplesPerCone = Math.max(generatorCfg.samplesPerCone, 500);
+    console.log(
+      `[SEG→traj] PCA unstable (elongation=${pca.anisotropy.elongation.toFixed(2)}); ` +
+        `widened cone to ${generatorCfg.coneHalfAngleDeg}° / ${generatorCfg.samplesPerCone} samples`
+    );
+  }
+
   // 4. Generate candidates
   const entrySurfaceMeshes = input.meshesByRole.get('ENTRY_SURFACE') ?? [];
   const candidates = generateCandidates({
     pca,
     entrySurfaceMeshes,
     maxLength: input.maxLength,
-    config: generator,
+    config: generatorCfg,
   });
   const generated = candidates.length;
   const tGen = performance.now();
@@ -143,8 +155,14 @@ export function optimizeTrajectories(input: OptimizeInput): OptimizationResult {
   );
   const tScore = performance.now();
 
-  // 7. Sort + top K
-  scored.sort((a, b) => b.score - a.score);
+  // 7. Sort + top K (prefer shorter extracerebral / total length on near-ties)
+  scored.sort((a, b) => {
+    const scoreDiff = b.score - a.score;
+    if (Math.abs(scoreDiff) > 1e-4) return scoreDiff;
+    const extraDiff = a.distSkinToHematoma - b.distSkinToHematoma;
+    if (Math.abs(extraDiff) > 0.05) return extraDiff;
+    return a.length - b.length;
+  });
   const topK = scored.slice(0, config.topK);
 
   const elapsedMs = performance.now() - t0;

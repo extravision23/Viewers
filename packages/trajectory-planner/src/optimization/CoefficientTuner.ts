@@ -14,6 +14,7 @@ import type {
   OptimizerConfig,
   DistanceFieldSet,
 } from '../types';
+import { DEFAULT_COEFFICIENTS } from '../types';
 import type { MeshRole } from '../roles';
 import { optimizeTrajectories } from '../planner/TrajectoryOptimizer';
 import { computeMetrics } from '../evaluation/TrajectoryMetrics';
@@ -48,8 +49,8 @@ export interface TunerConfig {
 }
 
 export const DEFAULT_TUNER_CONFIG: TunerConfig = {
-  alphaRange: { min: 0.5, max: 2.0, steps: 4 },
-  betaRange: { min: 0.1, max: 1.0, steps: 4 },
+  alphaRange: { min: 0.4, max: 1.5, steps: 4 },
+  betaRange: { min: 0.4, max: 1.8, steps: 4 },
   gammaRange: { min: 0.2, max: 1.5, steps: 4 },
   wVesselRange: { min: 0.5, max: 2.0, steps: 3 },
   wVentRange: { min: 0.3, max: 1.5, steps: 3 },
@@ -110,6 +111,7 @@ export function tuneCoefficients(input: TuneInput): TunerResult {
     alpha: alphas[0],
     beta: betas[0],
     gamma: gammas[0],
+    delta: DEFAULT_COEFFICIENTS.delta,
     wVessel: wVessels[0],
     wVent: wVents[0],
     wSinus: wSinuses[0],
@@ -124,7 +126,9 @@ export function tuneCoefficients(input: TuneInput): TunerResult {
           for (const wVent of wVents) {
             for (const wSinus of wSinuses) {
               const coefficients: ScoringCoefficients = {
-                alpha, beta, gamma, wVessel, wVent, wSinus,
+                alpha, beta, gamma,
+                delta: DEFAULT_COEFFICIENTS.delta,
+                wVessel, wVent, wSinus,
               };
 
               const allMetrics = input.cases.map(tc => {
