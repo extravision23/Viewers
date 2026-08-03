@@ -11,6 +11,7 @@ import {
   applyClientAnatomyWindow,
   storeBakedGrayscale,
   tintScene as applyTintScene,
+  getMaterialPreviewColorHex,
   type PreviewPreset,
 } from './glbPreviewRenderer';
 
@@ -64,6 +65,7 @@ export default function GlbPreviewDialog({
   const mountRef = useRef<HTMLDivElement | null>(null);
   const segmentNodesRef = useRef<Map<string, THREE.Object3D>>(new Map());
   const segmentColorsRef = useRef<Map<THREE.Object3D, string>>(new Map());
+  const segmentLabelsRef = useRef<Map<THREE.Object3D, string>>(new Map());
   const rootGroupRef = useRef<THREE.Group | null>(null);
   const previewSceneRef = useRef<ReturnType<typeof createGlbPreviewScene> | null>(null);
 
@@ -74,6 +76,10 @@ export default function GlbPreviewDialog({
   const [anatomyBlend, setAnatomyBlend] = useState(0.35);
   const [exposure, setExposure] = useState(1.1);
   const [preset, setPreset] = useState<PreviewPreset>('presentation');
+  /** Same tissue materials as volume+seg VTK surface shaders (brain/CSF/bone/vessel). */
+  const [tissueShaders, setTissueShaders] = useState(true);
+  /** Neutral tissue tones so material differences are easier to judge (like Material preview). */
+  const [materialPreviewColors, setMaterialPreviewColors] = useState(false);
   const [hasVertexColors, setHasVertexColors] = useState(false);
   const [sceneMeshCount, setSceneMeshCount] = useState(0);
   const [windowCenter, setWindowCenter] = useState(anatomyWindow.center);
@@ -127,10 +133,36 @@ export default function GlbPreviewDialog({
     }
     preview.applyOptions({ enhancedLighting, ssaoEnabled, exposure, preset });
     segmentColorsRef.current.forEach((color, node) => {
-      applyTintScene(node, color, anatomyBlend, preset);
+      applyTintScene(node, color, {
+        anatomyBlend: materialPreviewColors ? 0 : anatomyBlend,
+        preset,
+        tissueShaders,
+        materialPreviewColors,
+        segmentLabel: segmentLabelsRef.current.get(node),
+      });
     });
+    // Keep sidebar swatches in sync with the active color scheme.
+    setLegendItems(prev =>
+      prev.map(item => {
+        const node = segmentNodesRef.current.get(item.id);
+        const lutColor = node ? segmentColorsRef.current.get(node) : undefined;
+        const nextColor = materialPreviewColors
+          ? getMaterialPreviewColorHex(item.label)
+          : lutColor || item.color;
+        return nextColor === item.color ? item : { ...item, color: nextColor };
+      })
+    );
     syncSegmentVisibility();
-  }, [anatomyBlend, enhancedLighting, exposure, preset, ssaoEnabled, syncSegmentVisibility]);
+  }, [
+    anatomyBlend,
+    enhancedLighting,
+    exposure,
+    materialPreviewColors,
+    preset,
+    ssaoEnabled,
+    syncSegmentVisibility,
+    tissueShaders,
+  ]);
 
   useEffect(() => {
     applyVisualSettings();
@@ -145,6 +177,7 @@ export default function GlbPreviewDialog({
     setLegendItems([]);
     segmentNodesRef.current.clear();
     segmentColorsRef.current.clear();
+    segmentLabelsRef.current.clear();
     segmentVisibilityRef.current.clear();
     setHasVertexColors(false);
     setSceneMeshCount(0);
@@ -211,12 +244,27 @@ export default function GlbPreviewDialog({
                     foundVertexColors = true;
                     storeBakedGrayscale(segmentRoot);
                   }
-                  tintScene(segmentRoot, color, anatomyBlend, preset);
+                  tintScene(segmentRoot, color, {
+                    anatomyBlend: materialPreviewColors ? 0 : anatomyBlend,
+                    preset,
+                    tissueShaders,
+                    materialPreviewColors,
+                    segmentLabel: legendLabel,
+                  });
                   rootGroup.add(segmentRoot);
                   segmentNodesRef.current.set(itemId, segmentRoot);
                   segmentColorsRef.current.set(segmentRoot, color);
+                  segmentLabelsRef.current.set(segmentRoot, legendLabel);
                   segmentVisibilityRef.current.set(itemId, true);
-                  nextLegend.push({ id: itemId, color, label: legendLabel, visible: true });
+                  const legendColor = materialPreviewColors
+                    ? getMaterialPreviewColorHex(legendLabel)
+                    : color;
+                  nextLegend.push({
+                    id: itemId,
+                    color: legendColor,
+                    label: legendLabel,
+                    visible: true,
+                  });
                   resolve();
                 },
                 undefined,
@@ -302,6 +350,7 @@ export default function GlbPreviewDialog({
       });
       segmentNodesRef.current.clear();
       segmentColorsRef.current.clear();
+      segmentLabelsRef.current.clear();
       segmentVisibilityRef.current.clear();
       rootGroupRef.current = null;
       previewSceneRef.current = null;
@@ -346,6 +395,38 @@ export default function GlbPreviewDialog({
 
   const renderControls = () => (
       <div className="border-input bg-black/20 flex flex-wrap items-start gap-3 rounded border px-3 py-2 text-xs text-gray-200">
+        <label
+          className="flex items-center gap-2"
+          title="Same as Material preview in volume+segmentation: off = segment LUT colors; on = tissue tones (pink/red brain, glass CSF, matte bone, red vessel)."
+        >
+          <input
+            type="checkbox"
+            checked={materialPreviewColors}
+            onChange={e => setMaterialPreviewColors(e.target.checked)}
+          />
+          <span>
+            Material preview
+            <span className="text-muted-foreground block text-[10px] font-normal">
+              {materialPreviewColors ? 'Tissue / red tones' : 'Segment colors'}
+            </span>
+          </span>
+        </label>
+        <label
+          className="flex items-center gap-2"
+          title="Apply the same brain / CSF / bone / vessel materials used in volume+segmentation surface shaders."
+        >
+          <input
+            type="checkbox"
+            checked={tissueShaders}
+            onChange={e => setTissueShaders(e.target.checked)}
+          />
+          <span>
+            Tissue shaders
+            <span className="text-muted-foreground block text-[10px] font-normal">
+              Brain / CSF / bone / vessel
+            </span>
+          </span>
+        </label>
         <label
           className="flex items-center gap-2"
           title="Scene lighting, shadows, and specular highlights (PBR + environment map). Does not change segment colors."
@@ -396,7 +477,7 @@ export default function GlbPreviewDialog({
           <>
             <label
               className="flex min-w-[160px] flex-col gap-1"
-              title="0% — segment legend color only. 100% — mostly CT intensity baked on the mesh."
+              title="0% — segment legend color only. 100% — mostly CT intensity baked on the mesh. Disabled while Material preview uses tissue tones."
             >
               <span>Anatomy blend ({Math.round(anatomyBlend * 100)}%)</span>
               <span className="text-muted-foreground text-[10px]">Segment color vs CT on surface</span>
@@ -406,6 +487,7 @@ export default function GlbPreviewDialog({
                 max={1}
                 step={0.05}
                 value={anatomyBlend}
+                disabled={materialPreviewColors}
                 onChange={e => setAnatomyBlend(parseFloat(e.target.value))}
               />
             </label>
@@ -585,7 +667,8 @@ export default function GlbPreviewDialog({
           </div>
 
           <div className="text-muted-foreground shrink-0 text-xs">
-            Mouse: rotate | Shift + drag: pan | Wheel: zoom | Drag bottom-right corner to resize
+            Mouse: free rotate (360°) | Right-drag / Ctrl+drag: pan | Wheel: zoom | Drag bottom-right
+            corner to resize
             {hasVertexColors ? ' · Anatomy blend uses CT intensity baked into the mesh.' : ''}
           </div>
         </div>

@@ -298,6 +298,14 @@ export {
   useMeasurementTracking,
 };
 
+export {
+  inferSurfaceMaterialType,
+  getSurfaceMaterialPreset,
+  MATERIAL_PRESETS,
+  type SurfaceMaterialType,
+  type MaterialPreset,
+} from './utils/surfaceSegmentMaterials';
+
 // Export constants
 export { VOLUME_LOADER_SCHEME, DYNAMIC_VOLUME_LOADER_SCHEME } from './constants';
 export default cornerstoneExtension;
