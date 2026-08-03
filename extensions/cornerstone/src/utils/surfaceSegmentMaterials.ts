@@ -29,7 +29,7 @@ type PhongProperty = {
   setAmbientColor?: (r: number, g: number, b: number) => void;
 };
 
-type MaterialPreset = {
+export type MaterialPreset = {
   ambient: number;
   diffuse: number;
   specular: number;
@@ -56,7 +56,7 @@ function buildGradeShader(
 `;
 }
 
-const MATERIAL_PRESETS: Record<SurfaceMaterialType, MaterialPreset> = {
+export const MATERIAL_PRESETS: Record<SurfaceMaterialType, MaterialPreset> = {
   brain: {
     ambient: 0.08,
     diffuse: 0.55,
@@ -103,6 +103,11 @@ const MATERIAL_PRESETS: Record<SurfaceMaterialType, MaterialPreset> = {
     fragmentPostLight: buildGradeShader([1.0, 1.0, 1.0], [0.0, 0.0, 0.0], 0.0),
   },
 };
+
+/** Public lookup used by GLB preview and other non-VTK consumers. */
+export function getSurfaceMaterialPreset(type: SurfaceMaterialType): MaterialPreset {
+  return MATERIAL_PRESETS[type] ?? MATERIAL_PRESETS.default;
+}
 
 const SURFACE_UID_RE = /^(.*)-Surface-(\d+)$/;
 
