@@ -67,7 +67,7 @@ function fibonacciCone(
  * the hematoma centre toward the entry surface and return the hit
  * point. Returns null if no intersection.
  */
-function resolveEntryPoint(
+export function resolveEntryPoint(
   center: THREE.Vector3,
   outwardDir: THREE.Vector3,
   entrySurfaceMeshes: THREE.Mesh[],

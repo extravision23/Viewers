@@ -123,11 +123,13 @@ export interface ScoredTrajectory extends TrajectoryCandidate {
  *   P_norm         = 1 − exp(−P_raw)                          ∈ [0, 1)
  *
  * The final score is:
- *   score = α·V_H_norm − β·D_skin_norm − γ·P_norm − δ·L_norm
+ *   score = α·V_H_norm − β·D_skin_norm − γ·P_norm − δ·L_norm − ε·A_norm
  *
  * Absolute (mm) normalisation for path terms — not D_skin/length —
  * so short extracerebral approaches are preferred over long through-
  * lesion detours that only look "efficient" as a fraction.
+ *
+ * A_norm = 1 − |dir · PC1|  (0 = aligned with pathology axis).
  */
 export interface ScoreBreakdown {
   vhRaw: number;
@@ -138,6 +140,8 @@ export interface ScoreBreakdown {
   lengthNorm: number;
   proximityRaw: number;
   proximityNorm: number;
+  angleRaw: number;
+  angleNorm: number;
   dVessel: number;
   dVent: number;
   dSinus: number;
@@ -145,29 +149,61 @@ export interface ScoreBreakdown {
 
 /** Reference distances (mm) used to map path lengths into [0, 1]. */
 export const SKIN_DISTANCE_REF_MM = 100;
-export const TRAJECTORY_LENGTH_REF_MM = 150;
+/** Softer length scale so paths beyond ~150 mm still incur cost. */
+export const TRAJECTORY_LENGTH_REF_MM = 200;
 
 /** Weights for the scoring function. */
 export interface ScoringCoefficients {
-  alpha: number;   // weight for hematoma coverage
+  alpha: number;   // weight for hematoma coverage (keep low for access planning)
   beta: number;    // weight for absolute skin-to-hematoma distance
   gamma: number;   // weight for proximity penalty
   delta: number;   // weight for absolute trajectory length
+  /** Soft penalty for deviation from pathology principal axis. */
+  epsilon: number;
 
   wVessel: number; // proximity sub-weight: vessels
   wVent: number;   // proximity sub-weight: ventricles
   wSinus: number;  // proximity sub-weight: sinuses
 }
 
-/** Default scoring coefficients — length-aware starting point. */
+/**
+ * Default scoring — access-oriented: short path + clearance + PCA
+ * alignment dominate; coverage is a weak secondary signal.
+ */
 export const DEFAULT_COEFFICIENTS: ScoringCoefficients = {
-  alpha: 0.8,
-  beta: 1.2,
-  gamma: 0.5,
-  delta: 0.7,
+  alpha: 0.2,
+  beta: 1.5,
+  gamma: 0.9,
+  delta: 1.4,
+  epsilon: 0.45,
   wVessel: 1.0,
   wVent: 0.8,
   wSinus: 0.6,
+};
+
+/** Gradient-descent access optimizer settings. */
+export interface GradientDescentConfig {
+  /** Max GD iterations per multi-start seed. */
+  maxIterations: number;
+  /** Step size for (θ, φ) updates (radians). */
+  learningRate: number;
+  /** Finite-difference epsilon (radians). */
+  fdEpsilon: number;
+  /** How many shortest full-sphere entries to use as ipsilateral seeds. */
+  ipsilateralSeedCount: number;
+  /** Full-sphere samples used to discover short ipsilateral entries. */
+  sphereSeedSamples: number;
+  /** Max multi-start seeds (PCA ± ipsilateral ± cone survivors). */
+  maxStarts: number;
+}
+
+export const DEFAULT_GRADIENT_CONFIG: GradientDescentConfig = {
+  maxIterations: 35,
+  learningRate: 0.04,
+  fdEpsilon: 0.012,
+  ipsilateralSeedCount: 8,
+  sphereSeedSamples: 96,
+  maxStarts: 14,
 };
 
 /** Comparison metrics between AI and expert trajectories. */
@@ -220,6 +256,7 @@ export const DEFAULT_GENERATOR_CONFIG: GeneratorConfig = {
 export interface OptimizerConfig {
   generator: GeneratorConfig;
   coefficients: ScoringCoefficients;
+  gradient: GradientDescentConfig;
   topK: number;
   spacing: number;
   /**
@@ -234,6 +271,7 @@ export interface OptimizerConfig {
 export const DEFAULT_OPTIMIZER_CONFIG: OptimizerConfig = {
   generator: DEFAULT_GENERATOR_CONFIG,
   coefficients: DEFAULT_COEFFICIENTS,
+  gradient: DEFAULT_GRADIENT_CONFIG,
   topK: 5,
   spacing: 1.0,
   dilationRadiusMm: 0,

@@ -10,18 +10,18 @@
  *
  * Scoring function (higher = better):
  *
- *   Score(T) = α·V_H_norm − β·D_skin_norm − γ·P_norm − δ·L_norm
+ *   Score(T) = α·V_H_norm − β·D_skin_norm − γ·P_norm − δ·L_norm − ε·A_norm
  *
  * ── Normalisation strategy ───────────────────────────────────────
  *
  *   V_H_norm    = V_H(T) / hematomaVoxelCount                    ∈ [0, 1]
- *   D_skin_norm = min(1, D_skin_to_hema(T) / SKIN_REF_MM)        ∈ [0, 1]
- *   L_norm      = min(1, length(T) / LENGTH_REF_MM)              ∈ [0, 1]
+ *   D_skin_norm = 1 − exp(−D_skin_to_hema / SKIN_REF_MM)         ∈ [0, 1)
+ *   L_norm      = 1 − exp(−length / LENGTH_REF_MM)               ∈ [0, 1)
  *   P_norm      = 1 − exp(−P_raw)                                ∈ [0, 1)
+ *   A_norm      = 1 − |dir · PC1|                                ∈ [0, 1]
  *
- * Path terms use absolute millimetres (capped by clinical reference
- * distances), not D_skin/length. The fractional form rewarded long
- * through-lesion needles that only looked short as a ratio.
+ * Soft exponential length norms avoid early saturation so long
+ * contralateral paths keep accumulating cost.
  *
  * Raw P(T) is:
  *   w_vessel / (d_vessel + ε)
@@ -45,6 +45,7 @@ import type {
   TrajectoryHitPoints,
   ScoreBreakdown,
   DistanceFieldSet,
+  PCAResult,
 } from '../types';
 import {
   DEFAULT_COEFFICIENTS,
@@ -229,6 +230,8 @@ export interface EvaluatorInput {
    * safety radius without explicit cylinder geometry.
    */
   dilatedMasks?: VoxelMasks;
+  /** Pathology principal axis for soft angle term (optional). */
+  pca?: PCAResult | null;
 }
 
 /**
@@ -244,6 +247,7 @@ export function scoreTrajectory(
     masks,
     coefficients = DEFAULT_COEFFICIENTS,
     distanceFields,
+    pca,
   } = input;
 
   const grid = masks.hematomaMask;
@@ -298,20 +302,28 @@ export function scoreTrajectory(
     coefficients.wVent / (dVent + EPS) +
     coefficients.wSinus / (dSinus + EPS);
 
+  const dir = candidate.direction.clone().normalize();
+  const pc1 = pca?.principalAxis?.clone().normalize() ?? null;
+  const angleAlign = pc1 ? Math.abs(dir.dot(pc1)) : 1;
+  const angleNorm = 1 - angleAlign;
+  const angleRawDeg = (Math.acos(Math.min(1, Math.max(0, angleAlign))) * 180) / Math.PI;
+
   // ── Normalisation (see module docstring for strategy) ────────────
   const hemaTotal = input.hematomaVoxelCount ?? countSetVoxels(grid);
   const vhNorm = hemaTotal > 0 ? voxelsInHematoma / hemaTotal : 0;
-  const dSkinNorm = Math.min(1, distSkinToHematoma / SKIN_DISTANCE_REF_MM);
-  const lengthNorm = Math.min(1, candidate.length / TRAJECTORY_LENGTH_REF_MM);
+  const dSkinNorm = 1 - Math.exp(-distSkinToHematoma / SKIN_DISTANCE_REF_MM);
+  const lengthNorm = 1 - Math.exp(-candidate.length / TRAJECTORY_LENGTH_REF_MM);
   const proximityNorm = 1 - Math.exp(-proximityRaw);
   const delta = coefficients.delta ?? DEFAULT_COEFFICIENTS.delta;
+  const epsilon = coefficients.epsilon ?? DEFAULT_COEFFICIENTS.epsilon;
 
   // ── Final score (all terms in [0,1]) ─────────────────────────────
   const score =
     coefficients.alpha * vhNorm -
     coefficients.beta * dSkinNorm -
     coefficients.gamma * proximityNorm -
-    delta * lengthNorm;
+    delta * lengthNorm -
+    epsilon * angleNorm;
 
   const scoreBreakdown: ScoreBreakdown = {
     vhRaw: voxelsInHematoma,
@@ -322,6 +334,8 @@ export function scoreTrajectory(
     lengthNorm,
     proximityRaw,
     proximityNorm,
+    angleRaw: angleRawDeg,
+    angleNorm,
     dVessel,
     dVent,
     dSinus,

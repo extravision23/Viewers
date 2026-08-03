@@ -8,6 +8,7 @@
  */
 
 import type { OptimizerConfig, ScoringCoefficients, GeneratorConfig } from '../types';
+import { DEFAULT_COEFFICIENTS, DEFAULT_GRADIENT_CONFIG } from '../types';
 
 // ─── types ──────────────────────────────────────────────────────────
 
@@ -90,6 +91,8 @@ export function configFromSnapshot(snap: ConfigSnapshot): OptimizerConfig {
     alpha: snap.alpha,
     beta: snap.beta,
     gamma: snap.gamma,
+    delta: DEFAULT_COEFFICIENTS.delta,
+    epsilon: DEFAULT_COEFFICIENTS.epsilon,
     wVessel: snap.wVessel,
     wVent: snap.wVent,
     wSinus: snap.wSinus,
@@ -101,6 +104,7 @@ export function configFromSnapshot(snap: ConfigSnapshot): OptimizerConfig {
   return {
     coefficients,
     generator,
+    gradient: { ...DEFAULT_GRADIENT_CONFIG },
     topK: snap.topK,
     spacing: snap.spacingMm,
     dilationRadiusMm: snap.dilationRadiusMm,

@@ -43,7 +43,7 @@ export class TrajectoryTool {
   private baseMarker: THREE.Mesh;
   private trajectoryLine: Line2;
   private centerAxisLine: Line2;
-  private corridorCone: THREE.Mesh;
+  private corridorCylinder: THREE.Mesh;
   private ghostMarker?: THREE.Mesh;
   private riskHeatmap?: THREE.Line; // Risk heatmap visualization
   private showHeatmap: boolean = false;
@@ -141,10 +141,10 @@ export class TrajectoryTool {
     this.centerAxisLine = new Line2(axisGeometry, this.centerAxisMaterial);
     this.centerAxisLine.renderOrder = 200; // On top, visible through transparent target
     
-    // Create corridor cone
-    const coneGeometry = new THREE.ConeGeometry(1, 1, 16);
-    this.corridorCone = new THREE.Mesh(coneGeometry, this.invalidMaterial);
-    this.corridorCone.renderOrder = 150;
+    // Corridor cylinder — radius matches corridorRadius (same as collision)
+    const cylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 16, 1, true);
+    this.corridorCylinder = new THREE.Mesh(cylinderGeometry, this.invalidMaterial);
+    this.corridorCylinder.renderOrder = 150;
     
     // Create ghost marker
     const ghostGeometry = new THREE.SphereGeometry(0.8, 12, 12);
@@ -160,7 +160,7 @@ export class TrajectoryTool {
     this.scene.add(this.baseMarker);
     this.scene.add(this.trajectoryLine);
     this.scene.add(this.centerAxisLine);
-    this.scene.add(this.corridorCone);
+    this.scene.add(this.corridorCylinder);
     this.scene.add(this.ghostMarker);
     
     this.updateVisuals();
@@ -232,9 +232,9 @@ export class TrajectoryTool {
     
     const isValid = validationResult?.isValid ?? false;
     const actualLength = validationResult?.hitDistance ?? maxLength;
-    // When valid and target exists: extend cone and lines to target center (visible inside target)
+    // When valid and target exists: extend corridor and lines to target center
     const extendToTargetCenter = isValid && !!this.targetCenter;
-    const coneLength = extendToTargetCenter
+    const corridorLength = extendToTargetCenter
       ? basePoint.distanceTo(this.targetCenter!)
       : actualLength;
     const lineEnd = extendToTargetCenter
@@ -254,19 +254,15 @@ export class TrajectoryTool {
     }
     this.trajectoryLineMaterial.color.setHex(isValid ? 0x00ff88 : 0xff4444);
     
-    // Update corridor cone: extends to target center, visible inside target
+    // Constant-radius cylinder matching collision corridorRadius
     const up = new THREE.Vector3(0, 1, 0);
     const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
-    
-    const visualRadius = corridorRadius * 3;
-    this.corridorCone.scale.set(visualRadius, coneLength, visualRadius);
-    this.corridorCone.quaternion.copy(quaternion);
-    this.corridorCone.renderOrder = 150; // Above target (100) so cone is visible inside target
-    
-    const offset = direction.clone().multiplyScalar(coneLength * 0.5);
-    this.corridorCone.position.copy(basePoint).add(offset);
-    
-    this.corridorCone.material = isValid ? this.validMaterial : this.invalidMaterial;
+    this.corridorCylinder.scale.set(corridorRadius, Math.max(corridorLength, 0.01), corridorRadius);
+    this.corridorCylinder.quaternion.copy(quaternion);
+    this.corridorCylinder.renderOrder = 150;
+    const offset = direction.clone().multiplyScalar(corridorLength * 0.5);
+    this.corridorCylinder.position.copy(basePoint).add(offset);
+    this.corridorCylinder.material = isValid ? this.validMaterial : this.invalidMaterial;
     
     // Update center axis (thick dashed line): full path from beyond entry to target center
     const extendBeyondEntry = 20;
@@ -753,7 +749,7 @@ export class TrajectoryTool {
     this.baseMarker.visible = visible;
     this.trajectoryLine.visible = visible;
     this.centerAxisLine.visible = visible;
-    this.corridorCone.visible = visible;
+    this.corridorCylinder.visible = visible;
     if (this.ghostMarker) {
       this.ghostMarker.visible = visible && !this.isDragging;
     }
@@ -769,7 +765,7 @@ export class TrajectoryTool {
     (this.centerAxisLine.geometry as LineGeometry).dispose();
     this.trajectoryLineMaterial.dispose();
     this.centerAxisMaterial.dispose();
-    this.corridorCone.geometry.dispose();
+    this.corridorCylinder.geometry.dispose();
     this.validMaterial.dispose();
     this.invalidMaterial.dispose();
     
@@ -781,7 +777,7 @@ export class TrajectoryTool {
     this.scene.remove(this.baseMarker);
     this.scene.remove(this.trajectoryLine);
     this.scene.remove(this.centerAxisLine);
-    this.scene.remove(this.corridorCone);
+    this.scene.remove(this.corridorCylinder);
     if (this.ghostMarker) {
       this.scene.remove(this.ghostMarker);
     }

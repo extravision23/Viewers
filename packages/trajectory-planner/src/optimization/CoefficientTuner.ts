@@ -112,6 +112,7 @@ export function tuneCoefficients(input: TuneInput): TunerResult {
     beta: betas[0],
     gamma: gammas[0],
     delta: DEFAULT_COEFFICIENTS.delta,
+    epsilon: DEFAULT_COEFFICIENTS.epsilon,
     wVessel: wVessels[0],
     wVent: wVents[0],
     wSinus: wSinuses[0],
@@ -128,6 +129,7 @@ export function tuneCoefficients(input: TuneInput): TunerResult {
               const coefficients: ScoringCoefficients = {
                 alpha, beta, gamma,
                 delta: DEFAULT_COEFFICIENTS.delta,
+                epsilon: DEFAULT_COEFFICIENTS.epsilon,
                 wVessel, wVent, wSinus,
               };
 

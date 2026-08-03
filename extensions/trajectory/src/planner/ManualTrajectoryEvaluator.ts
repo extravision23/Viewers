@@ -96,6 +96,10 @@ export function evaluateManualTrajectory(
       ...DEFAULT_OPTIMIZER_CONFIG.generator,
       ...config?.generator,
     },
+    gradient: {
+      ...DEFAULT_OPTIMIZER_CONFIG.gradient,
+      ...config?.gradient,
+    },
   };
 
   if (cache.hematomaVoxelCount === 0) return null;
