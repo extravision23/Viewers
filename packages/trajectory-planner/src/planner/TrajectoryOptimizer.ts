@@ -1,13 +1,12 @@
 /**
- * TrajectoryOptimizer — deterministic search loop.
+ * TrajectoryOptimizer — access-path search with gradient descent.
  *
  * Pipeline:
- *   1. Voxelize scene → masks (+ optional distance fields)
+ *   1. Voxelize scene → masks (+ distance fields, optional corridor dilation)
  *   2. PCA on hematoma mask
- *   3. Generate candidates (PCA + cone)
- *   4. Filter (hard constraints)
- *   5. Score all surviving candidates
- *   6. Return top K (default 5)
+ *   3. Discrete cone candidates (seeds + fallback)
+ *   4. Multi-start gradient descent on (θ, φ) from hematoma centre
+ *   5. Return top K feasible trajectories + diagnostics
  */
 
 import * as THREE from 'three';
@@ -26,8 +25,23 @@ import { voxelizeScene, computeDistanceField, dilateMask, type ObstacleGroups } 
 import { analyzePCA } from '../geometry/PCAAnalyzer';
 import { generateCandidates } from './TrajectoryGenerator';
 import { violatesHardConstraints, scoreTrajectory } from './TrajectoryEvaluator';
+import { optimizeAccessByGradient } from './GradientAccessOptimizer';
 
 // ─── result type ────────────────────────────────────────────────────
+
+export interface OptimizationDiagnostics {
+  hasTarget: boolean;
+  hasEntrySurface: boolean;
+  hasObstacles: boolean;
+  generated: number;
+  hardRejected: number;
+  passedHardConstraints: number;
+  gdSeedsTried: number;
+  gdFeasible: number;
+  sphereHits: number;
+  /** Human-readable hints when no safe trajectory is found. */
+  hints: string[];
+}
 
 export interface OptimizationResult {
   trajectories: ScoredTrajectory[];
@@ -40,7 +54,13 @@ export interface OptimizationResult {
     passedHardConstraints: number;
     scored: number;
     elapsedMs: number;
+    hardRejected: number;
+    gdSeedsTried: number;
+    gdFeasible: number;
   };
+  diagnostics: OptimizationDiagnostics;
+  /** Best hard-blocked candidate (for UI messaging), if any. */
+  bestInfeasible: ScoredTrajectory | null;
 }
 
 // ─── public API ─────────────────────────────────────────────────────
@@ -51,6 +71,8 @@ export interface OptimizeInput {
   config?: Partial<OptimizerConfig>;
   /** Explicit obstacle subtype grouping from user assignment. */
   obstacleGroups?: ObstacleGroups;
+  /** Corridor radius (mm); used as dilation when dilationRadiusMm is 0. */
+  corridorRadiusMm?: number;
 }
 
 /**
@@ -71,22 +93,72 @@ export interface WorkerReadyInput {
   config: OptimizerConfig;
 }
 
+function buildHints(input: {
+  hasTarget: boolean;
+  hasEntrySurface: boolean;
+  hasObstacles: boolean;
+  generated: number;
+  passedHard: number;
+  gdFeasible: number;
+}): string[] {
+  const hints: string[] = [];
+  const empty = input.gdFeasible === 0;
+  if (!input.hasTarget) {
+    hints.push('Assign a TARGET (lesion/hematoma) role before generating AI.');
+  }
+  if (!input.hasEntrySurface) {
+    hints.push('Assign an ENTRY_SURFACE (skin/skull) role for scalp entry points.');
+  }
+  if (!input.hasObstacles && empty) {
+    hints.push(
+      'Mark critical structures as OBSTACLE (vessel / ventricle / sinus) so the planner can avoid them.',
+    );
+  }
+  if (input.generated === 0 && input.hasTarget && input.hasEntrySurface) {
+    hints.push('No entry-surface hits found — check mesh coverage or increase max length / samples.');
+  } else if (input.passedHard === 0 && input.generated > 0) {
+    hints.push(
+      `All ${input.generated} candidates hit obstacles. Relax OBSTACLE roles, reduce corridor dilation, or widen the search cone.`,
+    );
+  } else if (empty) {
+    hints.push(
+      'Gradient search found no safe corridor. Adjust obstacle roles or parameters.',
+    );
+  }
+  return hints;
+}
+
 /**
- * Run the full voxel-based, PCA-guided trajectory optimization.
+ * Run voxel-based access optimization with multi-start gradient descent.
  * Deterministic: same input always produces same output.
  */
 export function optimizeTrajectories(input: OptimizeInput): OptimizationResult {
   const t0 = performance.now();
-  const config: OptimizerConfig = { ...DEFAULT_OPTIMIZER_CONFIG, ...input.config };
-
-  const generator = { ...DEFAULT_OPTIMIZER_CONFIG.generator, ...input.config?.generator };
-  const coefficients: ScoringCoefficients = {
-    ...DEFAULT_OPTIMIZER_CONFIG.coefficients,
-    ...input.config?.coefficients,
+  const config: OptimizerConfig = {
+    ...DEFAULT_OPTIMIZER_CONFIG,
+    ...input.config,
+    generator: {
+      ...DEFAULT_OPTIMIZER_CONFIG.generator,
+      ...input.config?.generator,
+    },
+    coefficients: {
+      ...DEFAULT_OPTIMIZER_CONFIG.coefficients,
+      ...input.config?.coefficients,
+    },
+    gradient: {
+      ...DEFAULT_OPTIMIZER_CONFIG.gradient,
+      ...input.config?.gradient,
+    },
   };
-  const dilationRadiusMm = input.config?.dilationRadiusMm ?? config.dilationRadiusMm;
 
-  // 1. Voxelize (uses explicit obstacle subtype groups when provided)
+  const coefficients: ScoringCoefficients = config.coefficients;
+  const corridorFallback = input.corridorRadiusMm ?? 0;
+  const dilationRadiusMm =
+    (input.config?.dilationRadiusMm ?? config.dilationRadiusMm) > 0
+      ? (input.config?.dilationRadiusMm ?? config.dilationRadiusMm)
+      : corridorFallback;
+
+  // 1. Voxelize
   const voxResult: VoxelizeResult = voxelizeScene({
     meshesByRole: input.meshesByRole,
     spacing: config.spacing,
@@ -103,7 +175,7 @@ export function optimizeTrajectories(input: OptimizeInput): OptimizationResult {
   if (masks.sinusMask) distanceFields.sinus = computeDistanceField(masks.sinusMask);
   const tDF = performance.now();
 
-  // 2b. Dilated masks (optional)
+  // 2b. Dilated masks (corridor safety)
   let dilatedMasks: VoxelMasks | undefined;
   if (dilationRadiusMm > 0) {
     dilatedMasks = {
@@ -120,20 +192,19 @@ export function optimizeTrajectories(input: OptimizeInput): OptimizationResult {
   const pca = analyzePCA(masks.hematomaMask);
   const tPCA = performance.now();
 
-  // Widen the search cone when the hematoma is roughly spherical —
-  // principal axis is then arbitrary and a narrow cone misses short entries.
-  const generatorCfg = { ...generator };
+  const generatorCfg = { ...config.generator };
   if (!pca.anisotropy.isStable) {
     generatorCfg.coneHalfAngleDeg = Math.max(generatorCfg.coneHalfAngleDeg, 55);
     generatorCfg.samplesPerCone = Math.max(generatorCfg.samplesPerCone, 500);
     console.log(
       `[SEG→traj] PCA unstable (elongation=${pca.anisotropy.elongation.toFixed(2)}); ` +
-        `widened cone to ${generatorCfg.coneHalfAngleDeg}° / ${generatorCfg.samplesPerCone} samples`
+        `widened cone to ${generatorCfg.coneHalfAngleDeg}° / ${generatorCfg.samplesPerCone} samples`,
     );
   }
 
-  // 4. Generate candidates
+  // 4. Discrete cone candidates (seeds + fallback scoring)
   const entrySurfaceMeshes = input.meshesByRole.get('ENTRY_SURFACE') ?? [];
+  const targetMeshes = input.meshesByRole.get('TARGET') ?? [];
   const candidates = generateCandidates({
     pca,
     entrySurfaceMeshes,
@@ -143,19 +214,56 @@ export function optimizeTrajectories(input: OptimizeInput): OptimizationResult {
   const generated = candidates.length;
   const tGen = performance.now();
 
-  // 5. Hard-constraint filter
   const filtered = candidates.filter(c => !violatesHardConstraints(c, masks, dilatedMasks));
   const passedHardConstraints = filtered.length;
+  const hardRejected = generated - passedHardConstraints;
   const tFilter = performance.now();
 
-  // 6. Score
   const hematomaVoxelCount = voxResult.stats.hematoma.voxelCount;
-  const scored = filtered.map(c =>
-    scoreTrajectory(c, { masks, coefficients, distanceFields, hematomaVoxelCount, dilatedMasks }),
-  );
-  const tScore = performance.now();
+  const accessCtx = {
+    masks,
+    dilatedMasks,
+    distanceFields,
+    coefficients,
+    pca,
+    hematomaVoxelCount,
+  };
 
-  // 7. Sort + top K (prefer shorter extracerebral / total length on near-ties)
+  // 5. Gradient descent multi-start
+  const gdResult = optimizeAccessByGradient({
+    pca,
+    entrySurfaceMeshes,
+    maxLength: input.maxLength,
+    ctx: accessCtx,
+    gradient: config.gradient,
+    coneCandidates: filtered.length > 0 ? filtered : candidates.slice(0, 24),
+  });
+  const tGd = performance.now();
+
+  // Merge GD feasible with discrete survivors (score both with access coefficients)
+  const scoredMap = new Map<string, ScoredTrajectory>();
+  const addScored = (t: ScoredTrajectory) => {
+    const key = `${Math.round(t.entry.x * 2) / 2},${Math.round(t.entry.y * 2) / 2},${Math.round(t.entry.z * 2) / 2}`;
+    const prev = scoredMap.get(key);
+    if (!prev || t.score > prev.score) scoredMap.set(key, t);
+  };
+
+  for (const t of gdResult.feasible) addScored(t);
+
+  for (const c of filtered) {
+    addScored(
+      scoreTrajectory(c, {
+        masks,
+        coefficients,
+        distanceFields,
+        hematomaVoxelCount,
+        dilatedMasks,
+        pca,
+      }),
+    );
+  }
+
+  const scored = Array.from(scoredMap.values());
   scored.sort((a, b) => {
     const scoreDiff = b.score - a.score;
     if (Math.abs(scoreDiff) > 1e-4) return scoreDiff;
@@ -165,17 +273,48 @@ export function optimizeTrajectories(input: OptimizeInput): OptimizationResult {
   });
   const topK = scored.slice(0, config.topK);
 
+  const hasObstacles = !!(
+    masks.vesselMask ||
+    masks.ventricleMask ||
+    masks.sinusMask ||
+    (input.obstacleGroups &&
+      ((input.obstacleGroups.vessel?.length ?? 0) > 0 ||
+        (input.obstacleGroups.ventricle?.length ?? 0) > 0 ||
+        (input.obstacleGroups.sinus?.length ?? 0) > 0 ||
+        (input.obstacleGroups.other?.length ?? 0) > 0))
+  );
+
+  const diagnostics: OptimizationDiagnostics = {
+    hasTarget: targetMeshes.length > 0 && hematomaVoxelCount > 0,
+    hasEntrySurface: entrySurfaceMeshes.length > 0,
+    hasObstacles,
+    generated,
+    hardRejected,
+    passedHardConstraints,
+    gdSeedsTried: gdResult.stats.seedsTried,
+    gdFeasible: gdResult.stats.feasibleFound,
+    sphereHits: gdResult.stats.sphereHits,
+    hints: buildHints({
+      hasTarget: targetMeshes.length > 0 && hematomaVoxelCount > 0,
+      hasEntrySurface: entrySurfaceMeshes.length > 0,
+      hasObstacles,
+      generated,
+      passedHard: passedHardConstraints,
+      gdFeasible: topK.length,
+    }),
+  };
+
   const elapsedMs = performance.now() - t0;
   const [nx, ny, nz] = masks.hematomaMask.dims;
 
   console.log(
     `[Perf] optimize: total=${elapsedMs.toFixed(0)}ms` +
-    ` | vox=${(tVox - t0).toFixed(0)} df=${(tDF - tVox).toFixed(0)}` +
-    ` dil=${(tDilate - tDF).toFixed(0)} pca=${(tPCA - tDilate).toFixed(0)}` +
-    ` gen=${(tGen - tPCA).toFixed(0)} filter=${(tFilter - tGen).toFixed(0)}` +
-    ` score=${(tScore - tFilter).toFixed(0)}` +
-    ` | grid=${nx}x${ny}x${nz} (${(nx*ny*nz/1e6).toFixed(1)}M)` +
-    ` cand=${generated} pass=${passedHardConstraints} scored=${scored.length}`
+      ` | vox=${(tVox - t0).toFixed(0)} df=${(tDF - tVox).toFixed(0)}` +
+      ` dil=${(tDilate - tDF).toFixed(0)} pca=${(tPCA - tDilate).toFixed(0)}` +
+      ` gen=${(tGen - tPCA).toFixed(0)} filter=${(tFilter - tGen).toFixed(0)}` +
+      ` gd=${(tGd - tFilter).toFixed(0)}` +
+      ` | grid=${nx}x${ny}x${nz} (${((nx * ny * nz) / 1e6).toFixed(1)}M)` +
+      ` cand=${generated} pass=${passedHardConstraints} gdFeasible=${gdResult.stats.feasibleFound} top=${topK.length}`,
   );
 
   return {
@@ -188,6 +327,11 @@ export function optimizeTrajectories(input: OptimizeInput): OptimizationResult {
       passedHardConstraints,
       scored: scored.length,
       elapsedMs,
+      hardRejected,
+      gdSeedsTried: gdResult.stats.seedsTried,
+      gdFeasible: gdResult.stats.feasibleFound,
     },
+    diagnostics,
+    bestInfeasible: gdResult.bestInfeasible,
   };
 }

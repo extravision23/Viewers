@@ -193,6 +193,10 @@ export function runSensitivitySweeps(input: SweepInput): SweepResult {
       ...DEFAULT_OPTIMIZER_CONFIG.coefficients,
       ...input.baseConfig?.coefficients,
     },
+    gradient: {
+      ...DEFAULT_OPTIMIZER_CONFIG.gradient,
+      ...input.baseConfig?.gradient,
+    },
   };
 
   const baseSnap = snapshotConfig(resolvedBase);
@@ -244,6 +248,7 @@ export function defaultSweepSpecs(baseConfig?: Partial<OptimizerConfig>): SweepP
     ...baseConfig,
     generator: { ...DEFAULT_OPTIMIZER_CONFIG.generator, ...baseConfig?.generator },
     coefficients: { ...DEFAULT_OPTIMIZER_CONFIG.coefficients, ...baseConfig?.coefficients },
+    gradient: { ...DEFAULT_OPTIMIZER_CONFIG.gradient, ...baseConfig?.gradient },
   };
   const snap = snapshotConfig(resolved);
 

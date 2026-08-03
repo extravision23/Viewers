@@ -289,6 +289,7 @@ export class TrajectorySceneController {
           beta: this.advancedConfig.beta,
           gamma: this.advancedConfig.gamma,
           delta: this.advancedConfig.delta,
+          epsilon: this.advancedConfig.epsilon,
           wVessel: this.advancedConfig.wVessel,
           wVent: this.advancedConfig.wVent,
           wSinus: this.advancedConfig.wSinus,
@@ -318,7 +319,7 @@ export class TrajectorySceneController {
     if (!this.comparisonRenderer) {
       this.comparisonRenderer = new ComparisonRenderer(this.scene);
     }
-    this.comparisonRenderer.setManualTrajectory(entry, direction, length);
+    this.comparisonRenderer.setManualTrajectory(entry, direction, length, corridorRadius);
     this.comparisonRenderer.clearAi();
     this.emitWorkflow();
   }
@@ -341,6 +342,7 @@ export class TrajectorySceneController {
         this.enterTrajectoryMode();
       }
 
+      const corridorRadius = this.trajectoryTool?.state.corridorRadius ?? 2;
       const cfg: Partial<OptimizerConfig> = {
         spacing: this.advancedConfig.spacing,
         topK: this.advancedConfig.topK,
@@ -354,6 +356,7 @@ export class TrajectorySceneController {
           beta: this.advancedConfig.beta,
           gamma: this.advancedConfig.gamma,
           delta: this.advancedConfig.delta,
+          epsilon: this.advancedConfig.epsilon,
           wVessel: this.advancedConfig.wVessel,
           wVent: this.advancedConfig.wVent,
           wSinus: this.advancedConfig.wSinus,
@@ -365,6 +368,7 @@ export class TrajectorySceneController {
         meshesByRole: this.buildMeshesByRole(),
         maxLength: 350,
         obstacleGroups: this.buildObstacleSubtypeGroups(),
+        corridorRadiusMm: corridorRadius,
         config: { ...DEFAULT_OPTIMIZER_CONFIG, ...cfg } as OptimizerConfig,
       });
 
@@ -384,7 +388,7 @@ export class TrajectorySceneController {
           entry: best.entry.clone(),
           direction: best.direction.clone(),
           length: best.length,
-          corridorRadius: this.trajectoryTool?.state.corridorRadius ?? 2,
+          corridorRadius,
           isValid: true,
           metrics: aiMetrics,
         };
@@ -406,7 +410,12 @@ export class TrajectorySceneController {
         if (!this.comparisonRenderer) {
           this.comparisonRenderer = new ComparisonRenderer(this.scene);
         }
-        this.comparisonRenderer.setAiTrajectory(best.entry, best.direction, best.length);
+        this.comparisonRenderer.setAiTrajectory(
+          best.entry,
+          best.direction,
+          best.length,
+          corridorRadius,
+        );
 
         this.trajectoryTool?.setFromCandidate({
           entryPoint: best.entry,
@@ -416,10 +425,25 @@ export class TrajectorySceneController {
         this.validateTrajectory();
       } else {
         this.workflowState.aiSuggestedTrajectory = null;
+        const d = result.diagnostics;
+        const statsLine =
+          `Candidates: ${d.generated} generated, ${d.hardRejected} blocked by obstacles, ` +
+          `${d.gdSeedsTried} GD seeds, ${d.gdFeasible} feasible.`;
+        const recommendations = [
+          'No safe AI trajectory found.',
+          statsLine,
+          ...d.hints,
+        ];
+        if (result.bestInfeasible) {
+          const L = result.bestInfeasible.length.toFixed(1);
+          recommendations.push(
+            `Closest blocked path length ${L} mm — relax obstacles or corridor radius.`,
+          );
+        }
         this.workflowState.comparison = {
           angularDifferenceDeg: null,
           entryShiftMm: null,
-          recommendations: ['No safe AI trajectory found. Adjust obstacle roles or parameters.'],
+          recommendations,
         };
       }
     } finally {
