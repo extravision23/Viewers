@@ -39,7 +39,12 @@ export {
 } from './types';
 
 export { voxelizeScene, createEmptyGrid, computeDistanceField, dilateMask, computeMaskStats, gridIndex, gridToWorld, worldToGrid, type ObstacleGroups } from './voxel/Voxelizer';
-export { analyzePCA, collectOccupiedVoxels } from './geometry/PCAAnalyzer';
+export {
+  analyzePCA,
+  collectOccupiedVoxels,
+  computeAxisPenaltyScale,
+  FULL_AXIS_PENALTY_ELONGATION,
+} from './geometry/PCAAnalyzer';
 export { generateCandidates, resolveEntryPoint } from './planner/TrajectoryGenerator';
 export { violatesHardConstraints, scoreTrajectory } from './planner/TrajectoryEvaluator';
 export { optimizeAccessByGradient } from './planner/GradientAccessOptimizer';
