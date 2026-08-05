@@ -129,7 +129,12 @@ export interface ScoredTrajectory extends TrajectoryCandidate {
  * so short extracerebral approaches are preferred over long through-
  * lesion detours that only look "efficient" as a fraction.
  *
- * A_norm = 1 − |dir · PC1|  (0 = aligned with pathology axis).
+ * A_norm_raw = 1 − |dir · PC1|  (0 = aligned with pathology axis)
+ * A_scale    = shape-derived penalty scale in [0, 1]
+ * A_norm     = A_norm_raw · A_scale
+ *
+ * This lets near-spherical targets suppress the axis-alignment
+ * penalty while elongated targets keep the full term.
  */
 export interface ScoreBreakdown {
   vhRaw: number;
@@ -141,6 +146,8 @@ export interface ScoreBreakdown {
   proximityRaw: number;
   proximityNorm: number;
   angleRaw: number;
+  angleNormRaw: number;
+  anglePenaltyScale: number;
   angleNorm: number;
   dVessel: number;
   dVent: number;

@@ -18,7 +18,9 @@
  *   D_skin_norm = 1 − exp(−D_skin_to_hema / SKIN_REF_MM)         ∈ [0, 1)
  *   L_norm      = 1 − exp(−length / LENGTH_REF_MM)               ∈ [0, 1)
  *   P_norm      = 1 − exp(−P_raw)                                ∈ [0, 1)
- *   A_norm      = 1 − |dir · PC1|                                ∈ [0, 1]
+ *   A_norm_raw  = 1 − |dir · PC1|                                ∈ [0, 1]
+ *   A_scale     = anisotropy-derived multiplier                  ∈ [0, 1]
+ *   A_norm      = A_norm_raw · A_scale                           ∈ [0, 1]
  *
  * Soft exponential length norms avoid early saturation so long
  * contralateral paths keep accumulating cost.
@@ -32,6 +34,9 @@
  * unbounded inverse-distance sum to (0, 1).  When all distances are
  * large, P_raw→0 and P_norm→0.  When any distance is tiny, P_raw→∞
  * and P_norm→1.
+ *
+ * The axis-alignment term is suppressed for near-spherical targets:
+ * unstable PCA => A_scale = 0, elongated targets => A_scale → 1.
  * ──────────────────────────────────────────────────────────────────
  */
 
@@ -52,6 +57,7 @@ import {
   SKIN_DISTANCE_REF_MM,
   TRAJECTORY_LENGTH_REF_MM,
 } from '../types';
+import { computeAxisPenaltyScale } from '../geometry/PCAAnalyzer';
 import { gridIndex, gridToWorld } from '../voxel/Voxelizer';
 
 const EPS = 0.01; // mm – avoids division by zero in proximity penalty
@@ -305,7 +311,9 @@ export function scoreTrajectory(
   const dir = candidate.direction.clone().normalize();
   const pc1 = pca?.principalAxis?.clone().normalize() ?? null;
   const angleAlign = pc1 ? Math.abs(dir.dot(pc1)) : 1;
-  const angleNorm = 1 - angleAlign;
+  const angleNormRaw = 1 - angleAlign;
+  const anglePenaltyScale = computeAxisPenaltyScale(pca?.anisotropy);
+  const angleNorm = angleNormRaw * anglePenaltyScale;
   const angleRawDeg = (Math.acos(Math.min(1, Math.max(0, angleAlign))) * 180) / Math.PI;
 
   // ── Normalisation (see module docstring for strategy) ────────────
@@ -335,6 +343,8 @@ export function scoreTrajectory(
     proximityRaw,
     proximityNorm,
     angleRaw: angleRawDeg,
+    angleNormRaw,
+    anglePenaltyScale,
     angleNorm,
     dVessel,
     dVent,

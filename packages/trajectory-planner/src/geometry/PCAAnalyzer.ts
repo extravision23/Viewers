@@ -151,6 +151,12 @@ function eigenvectorSym3(s: Sym3, lambda: number): THREE.Vector3 {
  * and cone direction is essentially arbitrary.
  */
 const STABILITY_THRESHOLD = 1.5;
+/**
+ * Once elongation reaches this level, the axis-alignment penalty is
+ * applied at full strength. Between STABILITY_THRESHOLD and this
+ * value the penalty ramps up smoothly.
+ */
+export const FULL_AXIS_PENALTY_ELONGATION = 2.5;
 
 function computeAnisotropy(ev: [number, number, number]): PCAAnisotropy {
   const [l1, l2, l3] = ev;
@@ -163,6 +169,27 @@ function computeAnisotropy(ev: [number, number, number]): PCAAnisotropy {
   const isStable = elongation >= STABILITY_THRESHOLD;
 
   return { elongation, flatness, spread, isStable };
+}
+
+/**
+ * Convert PCA anisotropy into a [0,1] multiplier for the axis
+ * alignment penalty:
+ * - roughly spherical / unstable target => 0
+ * - clearly elongated target => 1
+ * - in-between => linear ramp
+ */
+export function computeAxisPenaltyScale(
+  anisotropy: PCAAnisotropy | null | undefined
+): number {
+  if (!anisotropy?.isStable) {
+    return 0;
+  }
+
+  const ramp =
+    (anisotropy.elongation - STABILITY_THRESHOLD) /
+    (FULL_AXIS_PENALTY_ELONGATION - STABILITY_THRESHOLD);
+
+  return Math.max(0, Math.min(1, ramp));
 }
 
 // ─── public API ─────────────────────────────────────────────────────
