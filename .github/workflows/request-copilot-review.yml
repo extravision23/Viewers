@@ -1,0 +1,27 @@
+name: Request Copilot code review
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  request-review:
+    # Draft PRs are reviewed once they are marked ready for review.
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      # Do not check out PR code: this workflow only calls the GitHub API and is
+      # therefore safe to run with write permission for pull requests from forks.
+      - name: Request a Copilot review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.requestReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              reviewers: ['copilot-pull-request-reviewer[bot]'],
+            });
