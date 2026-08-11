@@ -331,6 +331,11 @@ Leidos Biomedical Research under Task Order HHSN26100071 from NCI. [IDC Viewer](
 
 This project is tested with BrowserStack. Thank you for supporting open-source!
 
+## Pull-request review
+
+This fork automatically requests a GitHub Copilot review for each non-draft
+pull request and subsequent updates.
+
 ## License
 
 MIT © [OHIF](https://github.com/OHIF)
